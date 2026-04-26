@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar, TypeVar
 
+import httpx
 import openai
 from loguru import logger
 
@@ -239,6 +240,24 @@ class GlobalRateLimiter:
                 delay += random.uniform(0, jitter)
                 logger.warning(
                     f"Rate limited (429), attempt {attempt + 1}/{max_retries + 1}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+                self.set_blocked(delay)
+                await asyncio.sleep(delay)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 429:
+                    raise
+                last_exc = e
+                if attempt >= max_retries:
+                    logger.warning(
+                        f"HTTP 429 retry exhausted after {max_retries} retries"
+                    )
+                    break
+
+                delay = min(base_delay * (2**attempt), max_delay)
+                delay += random.uniform(0, jitter)
+                logger.warning(
+                    f"HTTP 429 from upstream, attempt {attempt + 1}/{max_retries + 1}. "
                     f"Retrying in {delay:.1f}s..."
                 )
                 self.set_blocked(delay)

@@ -11,6 +11,9 @@ from loguru import logger
 
 from .process_registry import register_pid, unregister_pid
 
+# Cap stderr capture so a runaway child cannot exhaust memory; pipe is still drained.
+_MAX_STDERR_CAPTURE_BYTES = 256 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class ClaudeCliConfig:
@@ -50,6 +53,31 @@ class CLISession:
         self.current_session_id: str | None = None
         self._is_busy = False
         self._cli_lock = asyncio.Lock()
+
+    @staticmethod
+    async def _drain_stderr_bounded(
+        process: asyncio.subprocess.Process,
+        *,
+        max_bytes: int = _MAX_STDERR_CAPTURE_BYTES,
+    ) -> bytes:
+        """Read stderr concurrently with stdout to avoid subprocess pipe deadlocks."""
+        if not process.stderr:
+            return b""
+        parts: list[bytes] = []
+        received = 0
+        while True:
+            chunk = await process.stderr.read(65_536)
+            if not chunk:
+                break
+            remaining = max_bytes - received
+            if remaining <= 0:
+                break
+            if len(chunk) > remaining:
+                parts.append(chunk[:remaining])
+                break
+            parts.append(chunk)
+            received += len(chunk)
+        return b"".join(parts)
 
     @property
     def is_busy(self) -> bool:
@@ -140,6 +168,11 @@ class CLISession:
 
                 session_id_extracted = False
                 buffer = bytearray()
+                stderr_task: asyncio.Task[bytes] | None = None
+                if self.process.stderr:
+                    stderr_task = asyncio.create_task(
+                        self._drain_stderr_bounded(self.process)
+                    )
 
                 try:
                     while True:
@@ -179,23 +212,20 @@ class CLISession:
                 except asyncio.CancelledError:
                     # Cancelling the handler task should not leave a Claude CLI
                     # subprocess running in the background.
-                    try:
-                        await asyncio.shield(self.stop())
-                    finally:
-                        raise
+                    await asyncio.shield(self.stop())
+                    raise
+                finally:
+                    stderr_bytes = b""
+                    if stderr_task is not None:
+                        stderr_bytes = await stderr_task
 
                 stderr_text = None
-                if self.process.stderr:
-                    stderr_output = await self.process.stderr.read()
-                    if stderr_output:
-                        stderr_text = stderr_output.decode(
-                            "utf-8", errors="replace"
-                        ).strip()
+                if stderr_bytes:
+                    stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+                    if stderr_text:
                         logger.error(f"Claude CLI Stderr: {stderr_text}")
-                        # Yield stderr as error event so it shows in UI
-                        if stderr_text:
-                            logger.info("CLI_SESSION: Yielding error event from stderr")
-                            yield {"type": "error", "error": {"message": stderr_text}}
+                        logger.info("CLI_SESSION: Yielding error event from stderr")
+                        yield {"type": "error", "error": {"message": stderr_text}}
 
                 return_code = await self.process.wait()
                 logger.info(

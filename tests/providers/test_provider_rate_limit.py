@@ -253,6 +253,32 @@ class TestProviderRateLimiter:
         assert call_count == 2
 
     @pytest.mark.asyncio
+    async def test_execute_with_retry_succeeds_on_httpx_429(self):
+        """HTTP 429 as httpx.HTTPStatusError then success returns result."""
+        import httpx
+        from httpx import Request, Response
+
+        limiter = GlobalRateLimiter.get_instance(rate_limit=100, rate_window=60)
+
+        call_count = 0
+
+        async def fail_then_ok():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                r = Response(429, request=Request("POST", "http://x"), text="slow")
+                raise httpx.HTTPStatusError(
+                    "Too Many Requests", request=r.request, response=r
+                )
+            return "ok"
+
+        result = await limiter.execute_with_retry(
+            fail_then_ok, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+        )
+        assert result == "ok"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
     async def test_max_concurrency_zero_raises(self):
         """max_concurrency <= 0 raises ValueError."""
         GlobalRateLimiter.reset_instance()

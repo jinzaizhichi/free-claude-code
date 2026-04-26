@@ -284,12 +284,24 @@ class AnthropicMessagesTransport(BaseProvider):
 
         async with self._global_rate_limiter.concurrency_slot():
             try:
-                response = await self._global_rate_limiter.execute_with_retry(
-                    self._send_stream_request, body
-                )
 
-                if response.status_code != 200:
-                    await self._raise_for_status(response, req_tag=req_tag)
+                async def _validated_stream_send() -> httpx.Response:
+                    """Send request; raise inside retry loop on 429 so rate limiter can backoff."""
+                    send_response = await self._send_stream_request(body)
+                    if send_response.status_code == 429:
+                        await send_response.aclose()
+                        send_response.raise_for_status()
+                    if send_response.status_code != 200:
+                        try:
+                            await self._raise_for_status(send_response, req_tag=req_tag)
+                        finally:
+                            if not send_response.is_closed:
+                                await send_response.aclose()
+                    return send_response
+
+                response = await self._global_rate_limiter.execute_with_retry(
+                    _validated_stream_send
+                )
 
                 async for chunk in self._iter_stream_chunks(
                     response,

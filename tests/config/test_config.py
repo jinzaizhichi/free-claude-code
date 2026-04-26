@@ -3,7 +3,10 @@
 import pytest
 from pydantic import ValidationError
 
-from config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from config.constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    HTTP_CONNECT_TIMEOUT_DEFAULT,
+)
 from config.nim import NimSettings
 
 
@@ -23,6 +26,7 @@ class TestSettings:
 
         monkeypatch.delenv("MODEL", raising=False)
         monkeypatch.delenv("HTTP_READ_TIMEOUT", raising=False)
+        monkeypatch.delenv("HTTP_CONNECT_TIMEOUT", raising=False)
         monkeypatch.setitem(Settings.model_config, "env_file", ())
         settings = Settings()
         assert settings.model == "nvidia_nim/z-ai/glm4.7"
@@ -32,6 +36,7 @@ class TestSettings:
         assert isinstance(settings.fast_prefix_detection, bool)
         assert isinstance(settings.enable_model_thinking, bool)
         assert settings.http_read_timeout == 120.0
+        assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
         assert settings.enable_web_server_tools is False
         assert settings.log_raw_api_payloads is False
         assert settings.log_raw_sse_events is False
@@ -132,6 +137,18 @@ class TestSettings:
         monkeypatch.setenv("HTTP_CONNECT_TIMEOUT", "5")
         settings = Settings()
         assert settings.http_connect_timeout == 5.0
+
+    def test_http_connect_timeout_default_matches_shared_constant(
+        self, monkeypatch
+    ) -> None:
+        """Default must match config.constants (and README / .env.example)."""
+        from config.settings import Settings
+
+        monkeypatch.delenv("HTTP_CONNECT_TIMEOUT", raising=False)
+        monkeypatch.setitem(Settings.model_config, "env_file", ())
+        settings = Settings()
+        assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
+        assert HTTP_CONNECT_TIMEOUT_DEFAULT == 10.0
 
     def test_enable_model_thinking_from_env(self, monkeypatch):
         """ENABLE_MODEL_THINKING env var is loaded into settings."""

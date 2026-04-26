@@ -7,12 +7,12 @@ Uses tree-based queuing for message ordering.
 """
 
 import asyncio
-import time
 
 from loguru import logger
 
 from core.anthropic import format_user_error_preview, get_user_facing_error_message
 
+from .cli_event_constants import STATUS_MESSAGE_PREFIXES
 from .command_dispatcher import (
     dispatch_command,
     message_kind_for_command,
@@ -20,6 +20,7 @@ from .command_dispatcher import (
 )
 from .event_parser import parse_cli_event
 from .models import IncomingMessage
+from .node_event_pipeline import handle_session_info_event, process_parsed_cli_event
 from .platforms.base import MessagingPlatform, SessionManagerInterface
 from .rendering.profiles import build_rendering_profile
 from .session import SessionStore
@@ -30,54 +31,7 @@ from .trees.queue_manager import (
     MessageTree,
     TreeQueueManager,
 )
-
-# Status message prefixes used to filter our own messages (ignore echo)
-STATUS_MESSAGE_PREFIXES = ("⏳", "💭", "🔧", "✅", "❌", "🚀", "🤖", "📋", "📊", "🔄")
-
-# Event types that update the transcript (frozenset for O(1) membership)
-TRANSCRIPT_EVENT_TYPES = frozenset(
-    {
-        "thinking_start",
-        "thinking_delta",
-        "thinking_chunk",
-        "thinking_stop",
-        "text_start",
-        "text_delta",
-        "text_chunk",
-        "text_stop",
-        "tool_use_start",
-        "tool_use_delta",
-        "tool_use_stop",
-        "tool_use",
-        "tool_result",
-        "block_stop",
-        "error",
-    }
-)
-
-# Event type -> (emoji, label) for status updates (O(1) lookup)
-_EVENT_STATUS_MAP = {
-    "thinking_start": ("🧠", "Claude is thinking..."),
-    "thinking_delta": ("🧠", "Claude is thinking..."),
-    "thinking_chunk": ("🧠", "Claude is thinking..."),
-    "text_start": ("🧠", "Claude is working..."),
-    "text_delta": ("🧠", "Claude is working..."),
-    "text_chunk": ("🧠", "Claude is working..."),
-    "tool_result": ("⏳", "Executing tools..."),
-}
-
-
-def _get_status_for_event(ptype: str, parsed: dict, format_status_fn) -> str | None:
-    """Return status string for event type, or None if no status update needed."""
-    entry = _EVENT_STATUS_MAP.get(ptype)
-    if entry is not None:
-        emoji, label = entry
-        return format_status_fn(emoji, label)
-    if ptype in ("tool_use_start", "tool_use_delta", "tool_use"):
-        if parsed.get("name") == "Task":
-            return format_status_fn("🤖", "Subagent working...")
-        return format_status_fn("⏳", "Executing tools...")
-    return None
+from .ui_updates import ThrottledTranscriptEditor
 
 
 class ClaudeMessageHandler:
@@ -339,83 +293,6 @@ class ClaudeMessageHandler:
         )
         return transcript, self.get_render_ctx()
 
-    async def _handle_session_info_event(
-        self,
-        event_data: dict,
-        tree: MessageTree | None,
-        node_id: str,
-        captured_session_id: str | None,
-        temp_session_id: str | None,
-    ) -> tuple[str | None, str | None]:
-        """Handle session_info event; return updated (captured_session_id, temp_session_id)."""
-        if event_data.get("type") != "session_info":
-            return captured_session_id, temp_session_id
-
-        real_session_id = event_data.get("session_id")
-        if not real_session_id or not temp_session_id:
-            return captured_session_id, temp_session_id
-
-        await self.cli_manager.register_real_session_id(
-            temp_session_id, real_session_id
-        )
-        if tree and real_session_id:
-            await tree.update_state(
-                node_id,
-                MessageState.IN_PROGRESS,
-                session_id=real_session_id,
-            )
-            self.session_store.save_tree(tree.root_id, tree.to_dict())
-
-        return real_session_id, None
-
-    async def _process_parsed_event(
-        self,
-        parsed: dict,
-        transcript: TranscriptBuffer,
-        update_ui,
-        last_status: str | None,
-        had_transcript_events: bool,
-        tree: MessageTree | None,
-        node_id: str,
-        captured_session_id: str | None,
-    ) -> tuple[str | None, bool]:
-        """Process a single parsed CLI event. Returns (last_status, had_transcript_events)."""
-        ptype = parsed.get("type") or ""
-
-        if ptype in TRANSCRIPT_EVENT_TYPES:
-            transcript.apply(parsed)
-            had_transcript_events = True
-
-        status = _get_status_for_event(ptype, parsed, self.format_status)
-        if status is not None:
-            await update_ui(status)
-            last_status = status
-        elif ptype == "block_stop":
-            await update_ui(last_status, force=True)
-        elif ptype == "complete":
-            if not had_transcript_events:
-                transcript.apply({"type": "text_chunk", "text": "Done."})
-            logger.info("HANDLER: Task complete, updating UI")
-            await update_ui(self.format_status("✅", "Complete"), force=True)
-            if tree and captured_session_id:
-                await tree.update_state(
-                    node_id,
-                    MessageState.COMPLETED,
-                    session_id=captured_session_id,
-                )
-                self.session_store.save_tree(tree.root_id, tree.to_dict())
-        elif ptype == "error":
-            error_msg = parsed.get("message", "Unknown error")
-            logger.error(f"HANDLER: Error event received: {error_msg}")
-            logger.info("HANDLER: Updating UI with error status")
-            await update_ui(self.format_status("❌", "Error"), force=True)
-            if tree:
-                await self._propagate_error_to_children(
-                    node_id, error_msg, "Parent task failed"
-                )
-
-        return last_status, had_transcript_events
-
     async def _process_node(
         self,
         node_id: str,
@@ -445,8 +322,6 @@ class ClaudeMessageHandler:
 
         transcript, render_ctx = self._create_transcript_and_render_ctx()
 
-        last_ui_update = 0.0
-        last_displayed_text = None
         had_transcript_events = False
         captured_session_id = None
         temp_session_id = None
@@ -458,52 +333,20 @@ class ClaudeMessageHandler:
             if parent_session_id:
                 logger.info(f"Will fork from parent session: {parent_session_id}")
 
-        async def update_ui(status: str | None = None, force: bool = False) -> None:
-            nonlocal last_ui_update, last_displayed_text, last_status
-            now = time.time()
-            if not force and now - last_ui_update < 1.0:
-                return
+        editor = ThrottledTranscriptEditor(
+            platform=self.platform,
+            parse_mode=self._parse_mode(),
+            get_limit_chars=self._get_limit_chars,
+            transcript=transcript,
+            render_ctx=render_ctx,
+            node_id=node_id,
+            chat_id=chat_id,
+            status_msg_id=status_msg_id,
+            debug_platform_edits=self._debug_platform_edits,
+        )
 
-            last_ui_update = now
-            if status is not None:
-                last_status = status
-            try:
-                display = transcript.render(
-                    render_ctx,
-                    limit_chars=self._get_limit_chars(),
-                    status=status,
-                )
-            except Exception as e:
-                logger.warning(f"Transcript render failed for node {node_id}: {e}")
-                return
-            if display and display != last_displayed_text:
-                logger.debug(
-                    "PLATFORM_EDIT: node_id={} chat_id={} msg_id={} force={} status={!r} chars={}",
-                    node_id,
-                    chat_id,
-                    status_msg_id,
-                    bool(force),
-                    status,
-                    len(display),
-                )
-                if self._debug_platform_edits:
-                    logger.debug("PLATFORM_EDIT_TEXT:\n{}", display)
-                else:
-                    head = display[:500]
-                    tail = display[-500:] if len(display) > 500 else ""
-                    logger.debug("PLATFORM_EDIT_PREVIEW_HEAD:\n{}", head)
-                    if tail:
-                        logger.debug("PLATFORM_EDIT_PREVIEW_TAIL:\n{}", tail)
-                last_displayed_text = display
-                try:
-                    await self.platform.queue_edit_message(
-                        chat_id,
-                        status_msg_id,
-                        display,
-                        parse_mode=self._parse_mode(),
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to update platform for node {node_id}: {e}")
+        async def update_ui(status: str | None = None, force: bool = False) -> None:
+            await editor.update(status, force=force)
 
         try:
             try:
@@ -550,8 +393,14 @@ class ClaudeMessageHandler:
                 (
                     captured_session_id,
                     temp_session_id,
-                ) = await self._handle_session_info_event(
-                    event_data, tree, node_id, captured_session_id, temp_session_id
+                ) = await handle_session_info_event(
+                    event_data,
+                    tree,
+                    node_id,
+                    captured_session_id,
+                    temp_session_id,
+                    cli_manager=self.cli_manager,
+                    session_store=self.session_store,
                 )
                 if event_data.get("type") == "session_info":
                     continue
@@ -563,7 +412,7 @@ class ClaudeMessageHandler:
                     (
                         last_status,
                         had_transcript_events,
-                    ) = await self._process_parsed_event(
+                    ) = await process_parsed_cli_event(
                         parsed,
                         transcript,
                         update_ui,
@@ -572,6 +421,9 @@ class ClaudeMessageHandler:
                         tree,
                         node_id,
                         captured_session_id,
+                        session_store=self.session_store,
+                        format_status=self.format_status,
+                        propagate_error_to_children=self._propagate_error_to_children,
                     )
 
         except asyncio.CancelledError:

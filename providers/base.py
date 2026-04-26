@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
+
 
 class ProviderConfig(BaseModel):
     """Configuration for a provider.
@@ -21,7 +23,7 @@ class ProviderConfig(BaseModel):
     max_concurrency: int = 5
     http_read_timeout: float = 300.0
     http_write_timeout: float = 10.0
-    http_connect_timeout: float = 2.0
+    http_connect_timeout: float = HTTP_CONNECT_TIMEOUT_DEFAULT
     enable_thinking: bool = True
     proxy: str = ""
     log_raw_sse_events: bool = False

@@ -40,7 +40,7 @@ def _make_mock_settings(**overrides):
     mock.nim = NimSettings()
     mock.http_read_timeout = 300.0
     mock.http_write_timeout = 10.0
-    mock.http_connect_timeout = 2.0
+    mock.http_connect_timeout = 10.0
     mock.enable_model_thinking = True
     for key, value in overrides.items():
         setattr(mock, key, value)

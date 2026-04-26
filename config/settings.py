@@ -10,6 +10,7 @@ from dotenv import dotenv_values
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from .nim import NimSettings
 from .provider_ids import SUPPORTED_PROVIDER_IDS
 
@@ -179,7 +180,8 @@ class Settings(BaseSettings):
         default=10.0, validation_alias="HTTP_WRITE_TIMEOUT"
     )
     http_connect_timeout: float = Field(
-        default=2.0, validation_alias="HTTP_CONNECT_TIMEOUT"
+        default=HTTP_CONNECT_TIMEOUT_DEFAULT,
+        validation_alias="HTTP_CONNECT_TIMEOUT",
     )
 
     # ==================== Fast Prefix Detection ====================
