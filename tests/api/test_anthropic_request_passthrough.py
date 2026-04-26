@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from api.models.anthropic import (
+    ContentBlockServerToolUse,
     ContentBlockText,
+    ContentBlockWebSearchToolResult,
     Message,
     MessagesRequest,
     SystemContent,
@@ -115,3 +117,50 @@ def test_pydantic_discriminator_still_distinguishes_blocks() -> None:
     b = m.content[0]
     assert isinstance(b, ContentBlockText)
     assert b.model_dump()["z"] == 1
+
+
+def test_server_tool_assistant_blocks_round_trip_in_native_body() -> None:
+    """Local server-tool responses must parse as valid history for a follow-up request."""
+    raw = {
+        "model": "m",
+        "max_tokens": 20,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "q"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_1",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "title": "T",
+                                "url": "https://example.com",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+        "mcp_servers": [{"type": "url", "url": "https://example.com/mcp"}],
+    }
+    req = MessagesRequest.model_validate(raw)
+    assert len(req.messages) == 1
+    blocks = req.messages[0].content
+    assert isinstance(blocks, list)
+    assert isinstance(blocks[0], ContentBlockServerToolUse)
+    assert isinstance(blocks[1], ContentBlockWebSearchToolResult)
+    body = build_base_native_anthropic_request_body(
+        req,
+        default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        thinking_enabled=False,
+    )
+    assert body["mcp_servers"][0]["type"] == "url"
+    assert body["messages"][0]["content"][0]["type"] == "server_tool_use"
+    assert body["messages"][0]["content"][1]["type"] == "web_search_tool_result"

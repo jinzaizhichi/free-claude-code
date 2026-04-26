@@ -264,8 +264,28 @@ def transform_native_sse_block_event(
             return prefix + format_native_sse_event(event_name, json.dumps(payload))
 
         # Delta with no prior `content_block_start` in this stream
-        if not thinking_enabled:
-            return None
+        if block_kind in ("text", "tool_use"):
+            synthetic_block = _synthetic_start_content_block(
+                block_kind,
+                upstream_index=upstream_index,
+            )
+            new_idx = _allocate_new_segment(
+                state,
+                upstream_index,
+                block_type=block_kind,
+                last_start_block=copy.deepcopy(synthetic_block),
+            )
+            start_payload = {
+                "type": "content_block_start",
+                "index": new_idx,
+                "content_block": synthetic_block,
+            }
+            prefix = format_native_sse_event(
+                "content_block_start", json.dumps(start_payload)
+            )
+            payload["index"] = new_idx
+            return prefix + format_native_sse_event(event_name, json.dumps(payload))
+        # thinking: pass through raw (unusual upstream shape)
         return event
 
     if event_name == "content_block_stop":

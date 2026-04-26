@@ -3,12 +3,31 @@
 import json
 from typing import Any
 
+from pydantic import BaseModel
+
 from .content import get_block_attr, get_block_type
 from .utils import set_if_not_none
 
 
 class OpenAIConversionError(Exception):
     """Raised when Anthropic content cannot be converted to OpenAI chat without data loss."""
+
+
+def _openai_reject_native_only_top_level_fields(request_data: Any) -> None:
+    """OpenAI chat providers cannot accept arbitrary top-level Anthropic request fields.
+
+    Request models with ``extra="allow"`` may carry native passthrough fields.
+    Those must be rejected for OpenAI conversion, not dropped silently.
+    """
+    if not isinstance(request_data, BaseModel):
+        return
+    extra = getattr(request_data, "__pydantic_extra__", None)
+    if not extra:
+        return
+    raise OpenAIConversionError(
+        "OpenAI chat conversion does not support these top-level request fields: "
+        f"{sorted(str(k) for k in extra)}. Use a native Anthropic transport provider."
+    )
 
 
 def _tool_name(tool: Any) -> str:
@@ -138,6 +157,15 @@ class AnthropicToOpenAIConverter:
                 raise OpenAIConversionError(
                     "Assistant image blocks are not supported for OpenAI chat conversion."
                 )
+            elif block_type in (
+                "server_tool_use",
+                "web_search_tool_result",
+                "web_fetch_tool_result",
+            ):
+                raise OpenAIConversionError(
+                    "OpenAI chat conversion does not support Anthropic server tool blocks "
+                    f"({block_type!r} in an assistant message). Use a native Anthropic transport provider."
+                )
 
         content_str = "\n\n".join(content_parts)
         if not content_str and not tool_calls:
@@ -246,6 +274,7 @@ def build_base_request_body(
     include_reasoning_content: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
+    _openai_reject_native_only_top_level_fields(request_data)
     messages = AnthropicToOpenAIConverter.convert_messages(
         request_data.messages,
         include_thinking=include_thinking,

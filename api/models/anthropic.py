@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # =============================================================================
@@ -55,6 +55,27 @@ class ContentBlockRedactedThinking(_AnthropicBlockBase):
     data: str
 
 
+class ContentBlockServerToolUse(_AnthropicBlockBase):
+    """Anthropic server-side tool invocation (e.g. ``web_search``, ``web_fetch``)."""
+
+    type: Literal["server_tool_use"]
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+class ContentBlockWebSearchToolResult(_AnthropicBlockBase):
+    type: Literal["web_search_tool_result"]
+    tool_use_id: str
+    content: Any
+
+
+class ContentBlockWebFetchToolResult(_AnthropicBlockBase):
+    type: Literal["web_fetch_tool_result"]
+    tool_use_id: str
+    content: Any
+
+
 class SystemContent(_AnthropicBlockBase):
     type: Literal["text"]
     text: str
@@ -74,6 +95,9 @@ class Message(BaseModel):
             | ContentBlockToolResult
             | ContentBlockThinking
             | ContentBlockRedactedThinking
+            | ContentBlockServerToolUse
+            | ContentBlockWebSearchToolResult
+            | ContentBlockWebFetchToolResult
         ]
     )
     reasoning_content: str | None = None
@@ -98,7 +122,12 @@ class ThinkingConfig(BaseModel):
 # Request Models
 # =============================================================================
 class MessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
+    # Internal routing / debug: accepted on parse but not serialized to providers.
+    original_model: str | None = Field(default=None, exclude=True)
+    resolved_provider_model: str | None = Field(default=None, exclude=True)
     max_tokens: int | None = None
     messages: list[Message]
     system: str | list[SystemContent] | None = None
@@ -115,7 +144,11 @@ class MessagesRequest(BaseModel):
 
 
 class TokenCountRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
+    original_model: str | None = Field(default=None, exclude=True)
+    resolved_provider_model: str | None = Field(default=None, exclude=True)
     messages: list[Message]
     system: str | list[SystemContent] | None = None
     tools: list[Tool] | None = None

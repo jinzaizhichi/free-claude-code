@@ -123,7 +123,9 @@ def getaddrinfo_rows_to_resolve_results(
                 resolved_host, port = sockaddr[:2]
         else:
             assert family == socket.AF_INET, family
-            resolved_host, port = sockaddr  # type: ignore[misc]
+            resolved_host, port = sockaddr[0], sockaddr[1]
+            resolved_host = str(resolved_host)
+            port = int(port)
         out.append(
             ResolveResult(
                 hostname=host,

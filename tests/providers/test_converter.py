@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from core.anthropic import AnthropicToOpenAIConverter, OpenAIConversionError
+from api.models.anthropic import MessagesRequest
+from core.anthropic import (
+    AnthropicToOpenAIConverter,
+    OpenAIConversionError,
+    build_base_request_body,
+)
 
 # --- Mock Classes ---
 
@@ -515,4 +520,37 @@ def test_convert_assistant_text_after_tool_use_raises():
     ]
     messages = [MockMessage("assistant", content)]
     with pytest.raises(OpenAIConversionError):
+        AnthropicToOpenAIConverter.convert_messages(messages)
+
+
+def test_openai_build_rejects_native_only_top_level_extras() -> None:
+    """OpenAI path must not silently drop e.g. ``mcp_servers`` from a native request."""
+    req = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "h"}],
+            "mcp_servers": [{"type": "url", "url": "https://x.com"}],
+        }
+    )
+    with pytest.raises(OpenAIConversionError, match="top-level request fields"):
+        build_base_request_body(req)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [MockBlock(type="server_tool_use", id="1", name="web_search", input={})],
+        [MockBlock(type="web_search_tool_result", tool_use_id="1", content=[])],
+        [
+            MockBlock(
+                type="web_fetch_tool_result",
+                tool_use_id="1",
+                content={"type": "web_fetch_result", "url": "https://a.com/x"},
+            )
+        ],
+    ],
+)
+def test_convert_assistant_server_tool_blocks_raise(content) -> None:
+    messages = [MockMessage("assistant", content)]
+    with pytest.raises(OpenAIConversionError, match="server tool"):
         AnthropicToOpenAIConverter.convert_messages(messages)
