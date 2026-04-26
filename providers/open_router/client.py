@@ -18,14 +18,22 @@ _ANTHROPIC_VERSION = "2023-06-01"
 
 
 @dataclass
+class _UpstreamBlockState:
+    """Per-upstream content block: current segment index and liveness in the model stream."""
+
+    block_type: str
+    down_index: int
+    open: bool
+
+
+@dataclass
 class _SSEFilterState:
-    """Track Anthropic content block index remapping while filtering thinking."""
+    """Track per-upstream content blocks and remapped Anthropic `index` field."""
 
     next_index: int = 0
-    index_map: dict[int, int] = field(default_factory=dict)
+    by_upstream: dict[int, _UpstreamBlockState] = field(default_factory=dict)
     dropped_indexes: set[int] = field(default_factory=set)
-    open_block_types: dict[int, str] = field(default_factory=dict)
-    closed_indexes: set[int] = field(default_factory=set)
+    pending_suppressed_stops: set[int] = field(default_factory=set)
     message_stopped: bool = False
 
 
@@ -88,40 +96,64 @@ class OpenRouterProvider(AnthropicMessagesTransport):
         )
 
     @staticmethod
-    def _remap_index(
-        payload: dict[str, Any], state: _SSEFilterState, *, create: bool
-    ) -> int | None:
-        """Return the downstream index for a content block event."""
-        upstream_index = payload.get("index")
-        if not isinstance(upstream_index, int):
+    def _delta_type_to_block_kind(delta_type: Any) -> str | None:
+        """Map a content_block_delta type to a content block kind (text/thinking/tool_use)."""
+        if not isinstance(delta_type, str):
             return None
-        if upstream_index in state.dropped_indexes:
-            return None
-        mapped_index = state.index_map.get(upstream_index)
-        if mapped_index is None and create:
-            mapped_index = state.next_index
-            state.index_map[upstream_index] = mapped_index
-            state.next_index += 1
-        return mapped_index
+        if delta_type == "thinking_delta":
+            return "thinking"
+        if delta_type == "text_delta":
+            return "text"
+        if delta_type == "input_json_delta":
+            return "tool_use"
+        return None
 
-    def _close_open_blocks_before(
-        self, state: _SSEFilterState, upstream_index: int
+    @staticmethod
+    def _synthetic_start_content_block(
+        block_kind: str, *, upstream_index: int
+    ) -> dict[str, Any]:
+        """Build a `content_block` for a `content_block_start` with empty streaming fields."""
+        if block_kind == "thinking":
+            return {"type": "thinking", "thinking": ""}
+        if block_kind == "text":
+            return {"type": "text", "text": ""}
+        if block_kind == "tool_use":
+            return {
+                "type": "tool_use",
+                "id": f"toolu_or_{upstream_index}",
+                "name": "",
+                "input": {},
+            }
+        return {"type": "text", "text": ""}
+
+    def _synthetic_close_other_open_blocks(
+        self, state: _SSEFilterState, current_upstream: int
     ) -> str:
-        """Close overlapping upstream blocks before starting a new block."""
-        events: list[str] = []
-        for open_upstream_index in list(state.open_block_types):
-            if open_upstream_index == upstream_index:
+        """Close every open block except `current_upstream` and track duplicate upstream stops."""
+        out: list[str] = []
+        for upstream, seg in list(state.by_upstream.items()):
+            if upstream == current_upstream or not seg.open:
                 continue
-            mapped_index = state.index_map.get(open_upstream_index)
-            if mapped_index is None:
-                continue
-            payload = {"type": "content_block_stop", "index": mapped_index}
-            events.append(
-                self._format_sse_event("content_block_stop", json.dumps(payload))
+            out.append(
+                self._format_sse_event(
+                    "content_block_stop",
+                    json.dumps({"type": "content_block_stop", "index": seg.down_index}),
+                )
             )
-            state.closed_indexes.add(open_upstream_index)
-            state.open_block_types.pop(open_upstream_index, None)
-        return "".join(events)
+            seg.open = False
+            state.pending_suppressed_stops.add(upstream)
+        return "".join(out)
+
+    def _allocate_new_segment(
+        self, state: _SSEFilterState, upstream_index: int, block_type: str
+    ) -> int:
+        """Assign a new downstream `index` for a segment and record upstream state."""
+        new_idx = state.next_index
+        state.next_index += 1
+        state.by_upstream[upstream_index] = _UpstreamBlockState(
+            block_type=block_type, down_index=new_idx, open=True
+        )
+        return new_idx
 
     @staticmethod
     def _should_drop_block_type(block_type: Any, *, thinking_enabled: bool) -> bool:
@@ -154,62 +186,93 @@ class OpenRouterProvider(AnthropicMessagesTransport):
                 return event
             block_type = block.get("type")
             upstream_index = payload.get("index")
+            if not isinstance(upstream_index, int):
+                return event
             if self._should_drop_block_type(
                 block_type, thinking_enabled=thinking_enabled
             ):
-                if isinstance(upstream_index, int):
-                    state.dropped_indexes.add(upstream_index)
+                state.dropped_indexes.add(upstream_index)
                 return None
 
-            mapped_index = self._remap_index(payload, state, create=True)
-            if mapped_index is not None:
-                payload["index"] = mapped_index
-                if isinstance(upstream_index, int) and isinstance(block_type, str):
-                    prefix = self._close_open_blocks_before(state, upstream_index)
-                    state.open_block_types[upstream_index] = block_type
-                    return prefix + self._format_sse_event(
-                        event_name, json.dumps(payload)
-                    )
-                return self._format_sse_event(event_name, json.dumps(payload))
-            return None if not thinking_enabled else event
+            if not isinstance(block_type, str):
+                return event
+            prefix = self._synthetic_close_other_open_blocks(state, upstream_index)
+            new_idx = self._allocate_new_segment(
+                state, upstream_index, block_type=block_type
+            )
+            payload["index"] = new_idx
+            return prefix + self._format_sse_event(event_name, json.dumps(payload))
 
         if event_name == "content_block_delta":
             delta = payload.get("delta")
             if not isinstance(delta, dict):
                 return event
             delta_type = delta.get("type")
+            upstream_index = payload.get("index")
+            if not isinstance(upstream_index, int):
+                return event
+            if upstream_index in state.dropped_indexes:
+                return None
             if self._should_drop_block_type(
                 delta_type, thinking_enabled=thinking_enabled
             ):
                 return None
 
-            mapped_index = self._remap_index(payload, state, create=False)
-            if mapped_index is not None:
-                payload["index"] = mapped_index
+            block_kind = self._delta_type_to_block_kind(delta_type)
+            if block_kind is None:
+                return event
+
+            seg = state.by_upstream.get(upstream_index)
+            if seg and seg.open:
+                payload["index"] = seg.down_index
                 return self._format_sse_event(event_name, json.dumps(payload))
-            if payload.get("index") in state.dropped_indexes:
-                return None
+
+            if seg is not None and not seg.open:
+                # More deltas for an upstream block after a synthetic (or other) close:
+                # reopen with a new downstream `index` and emit a synthetic `content_block_start` first.
+                state.pending_suppressed_stops.discard(upstream_index)
+                new_idx = self._allocate_new_segment(
+                    state, upstream_index, block_type=block_kind
+                )
+                start_payload = {
+                    "type": "content_block_start",
+                    "index": new_idx,
+                    "content_block": self._synthetic_start_content_block(
+                        block_kind, upstream_index=upstream_index
+                    ),
+                }
+                prefix = self._format_sse_event(
+                    "content_block_start", json.dumps(start_payload)
+                )
+                payload["index"] = new_idx
+                return prefix + self._format_sse_event(event_name, json.dumps(payload))
+
+            # Delta with no prior `content_block_start` in this stream
             if not thinking_enabled:
                 return None
+            return event
 
         if event_name == "content_block_stop":
             upstream_index = payload.get("index")
-            if (
-                isinstance(upstream_index, int)
-                and upstream_index in state.closed_indexes
-            ):
-                state.closed_indexes.discard(upstream_index)
+            if not isinstance(upstream_index, int):
+                return event
+            if upstream_index in state.dropped_indexes:
                 return None
-            mapped_index = self._remap_index(payload, state, create=False)
-            if mapped_index is not None:
-                payload["index"] = mapped_index
-                if isinstance(upstream_index, int):
-                    state.open_block_types.pop(upstream_index, None)
+            if upstream_index in state.pending_suppressed_stops:
+                state.pending_suppressed_stops.discard(upstream_index)
+                return None
+
+            seg = state.by_upstream.get(upstream_index)
+            if seg is not None and seg.open:
+                payload["index"] = seg.down_index
+                seg.open = False
                 return self._format_sse_event(event_name, json.dumps(payload))
-            if payload.get("index") in state.dropped_indexes:
+            if seg is not None:
+                # Spurious or duplicate `content_block_stop` for a closed block.
                 return None
             if not thinking_enabled:
                 return None
+            return event
 
         return event
 

@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.anthropic.stream_contracts import parse_sse_text
+from core.anthropic.stream_contracts import (
+    assert_anthropic_stream_contract,
+    parse_sse_text,
+    text_content,
+    thinking_content,
+)
 from providers.base import ProviderConfig
 from providers.open_router import OpenRouterProvider
 from providers.open_router.request import OPENROUTER_DEFAULT_MAX_TOKENS
@@ -381,6 +386,87 @@ async def test_stream_response_drops_redacted_thinking_when_enabled(
     payload = parse_sse_text(start_event)[0].data
     assert payload["index"] == 0
     assert payload["content_block"]["type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_stream_response_reopens_interleaved_thinking_after_text(
+    open_router_provider,
+):
+    """Overthinking+text+more thinking: downstream indices must not reuse closed blocks."""
+    response = FakeResponse(
+        lines=[
+            "event: message_start",
+            'data: {"type":"message_start","message":{}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"thinking","thinking":"","signature":""}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"thinking_delta","thinking":"first"}}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":1,'
+            '"content_block":{"type":"text","text":""}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"thinking_delta","thinking":" second"}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":1,'
+            '"delta":{"type":"text_delta","text":"Answer"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":1}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+            "event: message_stop",
+            'data: {"type":"message_stop"}',
+            "",
+        ]
+    )
+
+    with (
+        patch.object(open_router_provider._client, "build_request"),
+        patch.object(
+            open_router_provider._client,
+            "send",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+    ):
+        events = [e async for e in open_router_provider.stream_response(MockRequest())]
+
+    parsed = parse_sse_text("".join(events))
+    assert_anthropic_stream_contract(parsed)
+    assert thinking_content(parsed) == "first second"
+    assert "Answer" in text_content(parsed)
+    stop_payloads = [
+        p.data
+        for p in parsed
+        if p.event == "content_block_stop"
+        and p.data.get("type") == "content_block_stop"
+    ]
+    seen_stop_indices: set[int] = set()
+    for s in stop_payloads:
+        idx = s.get("index")
+        assert isinstance(idx, int)
+        assert idx not in seen_stop_indices, "stop reused or duplicated index"
+        seen_stop_indices.add(idx)
+    # Two distinct thinking block indices: initial + reopened segment
+    think_starts = [
+        p
+        for p in parsed
+        if p.event == "content_block_start"
+        and p.data.get("content_block", {}).get("type") == "thinking"
+    ]
+    assert len(think_starts) == 2, (
+        "reopened thinking must have its own `content_block_start`"
+    )
 
 
 @pytest.mark.asyncio

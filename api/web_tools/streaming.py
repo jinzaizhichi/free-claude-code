@@ -40,6 +40,11 @@ async def stream_web_server_tool_response(
     web_fetch_egress: WebFetchEgressPolicy,
     verbose_client_errors: bool = False,
 ) -> AsyncIterator[str]:
+    """Stream a minimal Anthropic-shaped turn for forced `web_search` / `web_fetch` (local fallback).
+
+    When `ENABLE_WEB_SERVER_TOOLS` is on, this is a proxy-side execution path — not a full
+    hosted Anthropic citation or encrypted-content pipeline.
+    """
     tool_name = forced_server_tool_name(request)
     if tool_name is None or not has_tool_named(request, tool_name):
         return
@@ -161,12 +166,22 @@ async def stream_web_server_tool_response(
     yield format_sse_event(
         "content_block_stop", {"type": "content_block_stop", "index": 1}
     )
+    # Model-facing summary: stream as normal text deltas (CLI/transcript code reads `text_delta`,
+    # not eager `text` on `content_block_start`).
     yield format_sse_event(
         "content_block_start",
         {
             "type": "content_block_start",
             "index": 2,
-            "content_block": {"type": "text", "text": summary},
+            "content_block": {"type": "text", "text": ""},
+        },
+    )
+    yield format_sse_event(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "text_delta", "text": summary},
         },
     )
     yield format_sse_event(

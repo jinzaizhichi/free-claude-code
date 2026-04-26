@@ -22,7 +22,9 @@ from config.settings import Settings
 from core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
+    text_content,
 )
+from messaging.event_parser import parse_cli_event
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
@@ -288,10 +290,28 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
     starts = [e for e in events if e.event == "content_block_start"]
     assert starts[0].data["content_block"]["type"] == "server_tool_use"
     assert starts[0].data["content_block"]["name"] == "web_search"
+    tool_use_id = starts[0].data["content_block"]["id"]
     assert starts[1].data["content_block"]["type"] == "web_search_tool_result"
+    assert starts[1].data["content_block"]["tool_use_id"] == tool_use_id
     assert starts[1].data["content_block"]["content"][0]["url"] == (
         "https://example.com/v4"
     )
+    text_deltas = [
+        e
+        for e in events
+        if e.event == "content_block_delta"
+        and e.data.get("delta", {}).get("type") == "text_delta"
+    ]
+    assert text_deltas, "summary must be streamed as text_delta"
+    assert "example.com" in text_content(events)
+    cli_text: list[str] = []
+    for ev in events:
+        cli_text.extend(
+            str(p.get("text", ""))
+            for p in parse_cli_event(ev.data)
+            if p.get("type") == "text_delta"
+        )
+    assert "example.com" in "".join(cli_text)
     deltas = [e for e in events if e.event == "message_delta"]
     assert deltas[-1].data["usage"]["server_tool_use"] == {"web_search_requests": 1}
 
@@ -330,10 +350,26 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
     assert_anthropic_stream_contract(events)
     starts = [e for e in events if e.event == "content_block_start"]
     assert starts[0].data["content_block"]["type"] == "server_tool_use"
+    tool_use_id = starts[0].data["content_block"]["id"]
     assert starts[1].data["content_block"]["type"] == "web_fetch_tool_result"
+    assert starts[1].data["content_block"]["tool_use_id"] == tool_use_id
     assert starts[1].data["content_block"]["content"]["content"]["title"] == (
         "Example Article"
     )
+    assert any(
+        e.event == "content_block_delta"
+        and e.data.get("delta", {}).get("type") == "text_delta"
+        for e in events
+    )
+    assert "Article body" in text_content(events)
+    cli_text: list[str] = []
+    for ev in events:
+        cli_text.extend(
+            str(p.get("text", ""))
+            for p in parse_cli_event(ev.data)
+            if p.get("type") == "text_delta"
+        )
+    assert "Article body" in "".join(cli_text)
     deltas = [e for e in events if e.event == "message_delta"]
     assert deltas[-1].data["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
 
@@ -375,6 +411,21 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
     assert secret not in raw
     assert "ValueError" not in raw
     assert "Web tool request failed." in raw
+    err_events = parse_sse_text(raw)
+    assert_anthropic_stream_contract(err_events)
+    assert any(
+        e.event == "content_block_delta"
+        and e.data.get("delta", {}).get("type") == "text_delta"
+        for e in err_events
+    )
+    cli_err_text: list[str] = []
+    for ev in err_events:
+        cli_err_text.extend(
+            str(p.get("text", ""))
+            for p in parse_cli_event(ev.data)
+            if p.get("type") == "text_delta"
+        )
+    assert "Web tool request failed." in "".join(cli_err_text)
     log_blob = " ".join(str(a) for c in log_warn.call_args_list for a in c.args)
     assert secret not in log_blob
     assert "example.com" in log_blob
