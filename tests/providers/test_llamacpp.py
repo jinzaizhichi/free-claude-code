@@ -324,3 +324,30 @@ async def test_stream_error_405_mentions_upstream_provider(llamacpp_provider):
         in blob
     )
     assert "REQ405" in blob
+
+
+def test_build_request_body_disabled_thinking_strips_native_thinking_history(
+    llamacpp_config,
+):
+    """With thinking disabled, prior assistant thinking/redacted blocks are omitted."""
+    config = llamacpp_config.model_copy(update={"enable_thinking": False})
+    provider = LlamaCppProvider(config)
+    messages = [
+        MockMessage("user", "Hi"),
+        MockMessage(
+            "assistant",
+            [
+                {"type": "thinking", "thinking": "p"},
+                {"type": "redacted_thinking", "data": "ZGF0YQ=="},
+            ],
+        ),
+    ]
+    req = MockRequest(
+        system=None,
+        messages=messages,
+    )
+    body = provider._build_request_body(req, thinking_enabled=False)
+    asst = body["messages"][1]
+    assert asst["content"] == ""
+    assert "thinking" not in str(body)
+    assert "redacted_thinking" not in str(body)

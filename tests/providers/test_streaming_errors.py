@@ -423,6 +423,59 @@ class TestProcessToolCall:
         assert "search" in event_text
         assert "call_123" in event_text
 
+    def test_tool_call_id_arrives_before_name_still_emits_id_and_name(self):
+        """Split-stream tool: id (no name) then name then args; id preserved on start."""
+        provider = _make_provider()
+        from core.anthropic import SSEBuilder
+
+        sse = SSEBuilder("msg_test", "test-model")
+        t1 = {
+            "index": 0,
+            "id": "call_split",
+            "function": {"name": None, "arguments": ""},
+        }
+        t2 = {
+            "index": 0,
+            "id": "call_split",
+            "function": {"name": "Grep", "arguments": ""},
+        }
+        t3 = {
+            "index": 0,
+            "id": "call_split",
+            "function": {"name": None, "arguments": "{}"},
+        }
+        b1 = "".join(provider._process_tool_call(t1, sse))
+        b2 = "".join(provider._process_tool_call(t2, sse))
+        b3 = "".join(provider._process_tool_call(t3, sse))
+        combined = b1 + b2 + b3
+        assert "call_split" in combined
+        assert "Grep" in combined
+        assert b1 == ""
+
+    def test_tool_call_arguments_buffered_until_name(self):
+        """Argument deltas before tool name are emitted after the block starts."""
+        provider = _make_provider()
+        from core.anthropic import SSEBuilder
+
+        sse = SSEBuilder("msg_test", "test-model")
+        t1 = {
+            "index": 0,
+            "id": "call_buf",
+            "function": {"name": None, "arguments": '{"x":'},
+        }
+        t2 = {
+            "index": 0,
+            "id": "call_buf",
+            "function": {"name": "Read", "arguments": "1}"},
+        }
+        b1 = "".join(provider._process_tool_call(t1, sse))
+        b2 = "".join(provider._process_tool_call(t2, sse))
+        assert b1 == ""
+        combined = b2
+        assert "Read" in combined
+        assert "call_buf" in combined
+        assert '{"x":' in combined or "partial_json" in combined
+
     def test_tool_call_without_id_generates_uuid(self):
         """Tool call without id generates a uuid-based id."""
         provider = _make_provider()

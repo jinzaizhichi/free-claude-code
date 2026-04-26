@@ -200,6 +200,30 @@ async def test_build_request_body_omits_thinking_when_disabled(ollama_config):
     assert body["model"] == "llama3.1:8b"
 
 
+def test_build_request_body_disabled_thinking_strips_assistant_thinking_blocks(
+    ollama_config,
+):
+    """Prior assistant thinking/redacted blocks are removed when policy is off."""
+    provider = OllamaProvider(
+        ollama_config.model_copy(update={"enable_thinking": False})
+    )
+    req = MockRequest(
+        system=None,
+        messages=[
+            MockMessage("user", "hi"),
+            MockMessage(
+                "assistant",
+                [
+                    {"type": "thinking", "thinking": "t"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                ],
+            ),
+        ],
+    )
+    body = provider._build_request_body(req, thinking_enabled=False)
+    assert body["messages"][1]["content"] == ""
+
+
 @pytest.mark.asyncio
 async def test_stream_error_status_code(ollama_provider):
     """Non-200 status code is yielded as an SSE API error."""

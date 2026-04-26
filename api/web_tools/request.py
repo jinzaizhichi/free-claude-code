@@ -12,6 +12,19 @@ def request_text(request: MessagesRequest) -> str:
     return "\n".join(content_text(message.content) for message in request.messages)
 
 
+def forced_tool_turn_text(request: MessagesRequest) -> str:
+    """Text for parsing forced server-tool inputs: latest user turn only (avoids stale history)."""
+    if not request.messages:
+        return ""
+
+    from .parsers import content_text
+
+    for message in reversed(request.messages):
+        if message.role == "user":
+            return content_text(message.content)
+    return ""
+
+
 def forced_server_tool_name(request: MessagesRequest) -> str | None:
     """Return web_search or web_fetch only when tool_choice forces that server tool."""
     tc = request.tool_choice

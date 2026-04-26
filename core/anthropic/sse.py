@@ -53,6 +53,7 @@ class ToolCallState:
     started: bool = False
     task_arg_buffer: str = ""
     task_args_emitted: bool = False
+    pre_start_args: str = ""
 
 
 @dataclass
@@ -70,6 +71,19 @@ class ContentBlockManager:
         idx = self.next_index
         self.next_index += 1
         return idx
+
+    def ensure_tool_state(self, index: int) -> ToolCallState:
+        """Create tool stream state for ``index`` when the first tool delta arrives."""
+        if index not in self.tool_states:
+            self.tool_states[index] = ToolCallState(block_index=-1, tool_id="", name="")
+        return self.tool_states[index]
+
+    def set_stream_tool_id(self, index: int, tool_id: str | None) -> None:
+        """Record OpenAI tool call id before ``content_block_start`` (split-stream providers)."""
+        if not tool_id:
+            return
+        state = self.ensure_tool_state(index)
+        state.tool_id = str(tool_id)
 
     def register_tool_name(self, index: int, name: str) -> None:
         """Record tool name fragments as they arrive from chunked OpenAI streams.

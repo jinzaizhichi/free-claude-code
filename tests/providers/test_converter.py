@@ -484,6 +484,21 @@ def test_convert_user_message_tool_result_dict_as_json():
     assert result[0]["content"] == '{"ok": true, "count": 2}'
 
 
+def test_assistant_redacted_thinking_omitted_from_openai_chat():
+    """Opaque redacted_thinking is not materialized as content or reasoning_content."""
+    content = [
+        MockBlock(type="redacted_thinking", data="secret-opaque"),
+        MockBlock(type="text", text="Visible."),
+    ]
+    messages = [MockMessage("assistant", content)]
+    result = AnthropicToOpenAIConverter.convert_messages(
+        messages, include_thinking=True, include_reasoning_content=True
+    )
+    assert result[0]["content"] == "Visible."
+    assert "secret-opaque" not in result[0]["content"]
+    assert "reasoning_content" not in result[0]
+
+
 def test_convert_user_message_image_raises():
     content = [
         MockBlock(type="image", source={"type": "url", "url": "https://example.com/x"})

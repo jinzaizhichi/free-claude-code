@@ -216,6 +216,28 @@ def test_build_request_body_strips_unsigned_thinking_history(open_router_provide
     ]
 
 
+def test_build_request_body_strips_redacted_when_thinking_disabled(
+    open_router_config,
+):
+    """Disabled thinking must remove all assistant thinking history including redacted."""
+    provider = OpenRouterProvider(
+        open_router_config.model_copy(update={"enable_thinking": False})
+    )
+    req = MockRequest(
+        messages=[
+            MockMessage(
+                "assistant",
+                [
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "text", "text": "Hi"},
+                ],
+            )
+        ]
+    )
+    body = provider._build_request_body(req)
+    assert body["messages"][0]["content"] == [{"type": "text", "text": "Hi"}]
+
+
 def test_build_request_body_preserves_signed_thinking_history(open_router_provider):
     req = MockRequest(
         messages=[

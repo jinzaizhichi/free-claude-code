@@ -65,6 +65,19 @@ class BaseProvider(ABC):
                 request_enabled = bool(enabled)
         return config_enabled and request_enabled
 
+    def preflight_stream(
+        self, request: Any, *, thinking_enabled: bool | None = None
+    ) -> None:
+        """Eagerly validate/build the upstream request before opening an SSE stream.
+
+        Subclasses with ``_build_request_body`` (OpenAI and native) raise
+        :class:`providers.exceptions.InvalidRequestError` on conversion failures.
+        """
+        build = getattr(self, "_build_request_body", None)
+        if build is None:
+            return
+        build(request, thinking_enabled=thinking_enabled)
+
     def _log_stream_transport_error(
         self, tag: str, req_tag: str, error: Exception
     ) -> None:

@@ -317,6 +317,50 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypatch):
+    """Only the latest user message supplies the URL (not earlier transcript text)."""
+    target = "https://new-only.example.com/page"
+
+    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+        assert url == target
+        return {
+            "url": url,
+            "title": "T",
+            "media_type": "text/plain",
+            "data": "x",
+        }
+
+    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", fake_fetch)
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[
+            Message(
+                role="user",
+                content="Earlier turn https://stale.com/old-article ignore this",
+            ),
+            Message(role="assistant", content="ok"),
+            Message(
+                role="user",
+                content=f"Please fetch {target} for the summary",
+            ),
+        ],
+        tools=[Tool(name="web_fetch", type="web_fetch_20250910")],
+        tool_choice={"type": "tool", "name": "web_fetch"},
+    )
+
+    raw = "".join(
+        [
+            event
+            async for event in stream_web_server_tool_response(
+                request, input_tokens=1, web_fetch_egress=_STRICT_EGRESS
+            )
+        ]
+    )
+    assert target in raw
+
+
+@pytest.mark.asyncio
 async def test_streams_web_fetch_server_tool_result(monkeypatch):
     async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
         assert url == "https://example.com/article"

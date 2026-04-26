@@ -126,6 +126,10 @@ class ClaudeProxyService:
             logger.debug("No optimization matched, routing to provider")
 
             provider = self._provider_getter(routed.resolved.provider_id)
+            provider.preflight_stream(
+                routed.request,
+                thinking_enabled=routed.resolved.thinking_enabled,
+            )
 
             request_id = f"req_{uuid.uuid4().hex[:12]}"
             logger.info(

@@ -139,6 +139,22 @@ class OpenAIChatTransport(BaseProvider):
             )
             return stream, retry_body
 
+    def _emit_tool_arg_delta(
+        self, sse: SSEBuilder, tc_index: int, args: str
+    ) -> Iterator[str]:
+        """Emit one argument fragment for a started tool block (Task buffer or raw JSON)."""
+        if not args:
+            return
+        state = sse.blocks.tool_states.get(tc_index)
+        if state is None:
+            return
+        if state.name == "Task":
+            parsed = sse.blocks.buffer_task_args(tc_index, args)
+            if parsed is not None:
+                yield sse.emit_tool_delta(tc_index, json.dumps(parsed))
+            return
+        yield sse.emit_tool_delta(tc_index, args)
+
     def _process_tool_call(self, tc: dict, sse: SSEBuilder) -> Iterator[str]:
         """Process a single tool call delta and yield SSE events."""
         tc_index = tc.get("index", 0)
@@ -147,34 +163,42 @@ class OpenAIChatTransport(BaseProvider):
 
         fn_delta = tc.get("function", {})
         incoming_name = fn_delta.get("name")
-        arguments = fn_delta.get("arguments", "")
+        arguments = fn_delta.get("arguments", "") or ""
+
+        if tc.get("id") is not None:
+            sse.blocks.set_stream_tool_id(tc_index, tc.get("id"))
+
         if incoming_name is not None:
             sse.blocks.register_tool_name(tc_index, incoming_name)
 
         state = sse.blocks.tool_states.get(tc_index)
+        resolved_id = (state.tool_id if state and state.tool_id else None) or tc.get(
+            "id"
+        )
+        resolved_name = (state.name if state else "") or ""
+
+        if not state or not state.started:
+            name_ok = bool((resolved_name or "").strip())
+            if name_ok:
+                tool_id = str(resolved_id) if resolved_id else f"tool_{uuid.uuid4()}"
+                display_name = (resolved_name or "").strip() or "tool_call"
+                yield sse.start_tool_block(tc_index, tool_id, display_name)
+                state = sse.blocks.tool_states[tc_index]
+                if state.pre_start_args:
+                    pre = state.pre_start_args
+                    state.pre_start_args = ""
+                    yield from self._emit_tool_arg_delta(sse, tc_index, pre)
+
+        state = sse.blocks.tool_states.get(tc_index)
+        if not arguments:
+            return
         if state is None or not state.started:
-            name = state.name if state else ""
-            if name or tc.get("id"):
-                tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-                yield sse.start_tool_block(tc_index, tool_id, name)
-
-        args = arguments
-        if args:
-            state = sse.blocks.tool_states.get(tc_index)
-            if state is None or not state.started:
-                tool_id = tc.get("id") or f"tool_{uuid.uuid4()}"
-                name = (state.name if state else None) or "tool_call"
-                yield sse.start_tool_block(tc_index, tool_id, name)
-                state = sse.blocks.tool_states.get(tc_index)
-
-            current_name = state.name if state else ""
-            if current_name == "Task":
-                parsed = sse.blocks.buffer_task_args(tc_index, args)
-                if parsed is not None:
-                    yield sse.emit_tool_delta(tc_index, json.dumps(parsed))
+            state = sse.blocks.ensure_tool_state(tc_index)
+            if not (resolved_name or "").strip():
+                state.pre_start_args += arguments
                 return
 
-            yield sse.emit_tool_delta(tc_index, args)
+        yield from self._emit_tool_arg_delta(sse, tc_index, arguments)
 
     def _flush_task_arg_buffers(self, sse: SSEBuilder) -> Iterator[str]:
         """Emit buffered Task args as a single JSON delta (best-effort)."""

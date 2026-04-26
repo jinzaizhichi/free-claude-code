@@ -355,3 +355,55 @@ async def test_stream_error_405_mentions_upstream_provider(lmstudio_provider):
         in blob
     )
     assert "REQ405" in blob
+
+
+def test_build_request_body_disabled_thinking_strips_native_thinking_history(
+    lmstudio_config,
+):
+    """Disabled thinking must omit prior assistant thinking/redacted blocks in JSON."""
+    provider = LMStudioProvider(
+        lmstudio_config.model_copy(update={"enable_thinking": False})
+    )
+    req = MockRequest(
+        system=None,
+        messages=[
+            MockMessage("user", "hi"),
+            MockMessage(
+                "assistant",
+                [
+                    {"type": "thinking", "thinking": "t"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                ],
+            ),
+        ],
+    )
+    body = provider._build_request_body(req, thinking_enabled=False)
+    assert body["messages"][1]["content"] == ""
+    assert "redacted_thinking" not in str(body)
+
+
+def test_build_request_body_preserves_signed_thinking_native_history(lmstudio_config):
+    """When thinking is enabled, signed thinking blocks are kept; unsigned stripped."""
+    provider = LMStudioProvider(lmstudio_config)
+    req = MockRequest(
+        system=None,
+        messages=[
+            MockMessage("user", "hi"),
+            MockMessage(
+                "assistant",
+                [
+                    {
+                        "type": "thinking",
+                        "thinking": "signed",
+                        "signature": "sig",
+                    },
+                    {"type": "redacted_thinking", "data": "opaque"},
+                ],
+            ),
+        ],
+    )
+    body = provider._build_request_body(req, thinking_enabled=True)
+    c = body["messages"][1]["content"]
+    assert isinstance(c, list)
+    assert any(isinstance(b, dict) and b.get("type") == "thinking" for b in c)
+    assert any(isinstance(b, dict) and b.get("type") == "redacted_thinking" for b in c)

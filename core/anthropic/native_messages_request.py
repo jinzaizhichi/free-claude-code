@@ -69,11 +69,16 @@ def _dump_request_fields(request_data: Any) -> dict[str, Any]:
     return dumped
 
 
-def _strip_unsigned_thinking_history(messages: Any) -> Any:
-    """Remove assistant ``thinking`` blocks that lack a signature (cannot replay).
+def sanitize_native_messages_thinking_policy(
+    messages: Any, *, thinking_enabled: bool
+) -> Any:
+    """Filter assistant message thinking blocks for upstream native Anthropic JSON.
 
-    ``redacted_thinking`` blocks are preserved: they carry opaque provider data and
-    do not use ``signature`` the same way as native ``thinking`` blocks.
+    When ``thinking_enabled`` is false, remove ``thinking`` and ``redacted_thinking``
+    history so disabled policy is not undermined by prior turns.
+
+    When true, keep ``redacted_thinking`` and signed ``thinking``; remove only
+    unsigned plain ``thinking`` blocks (not replayable).
     """
     if not isinstance(messages, list):
         return messages
@@ -84,20 +89,34 @@ def _strip_unsigned_thinking_history(messages: Any) -> Any:
             sanitized_messages.append(message)
             continue
 
+        if message.get("role") != "assistant":
+            sanitized_messages.append(message)
+            continue
+
         content = message.get("content")
         if not isinstance(content, list):
             sanitized_messages.append(message)
             continue
 
-        sanitized_content = [
-            block
-            for block in content
-            if not (
-                isinstance(block, dict)
-                and block.get("type") == "thinking"
-                and not isinstance(block.get("signature"), str)
-            )
-        ]
+        if not thinking_enabled:
+            sanitized_content = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") in ("thinking", "redacted_thinking")
+                )
+            ]
+        else:
+            sanitized_content = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") == "thinking"
+                    and not isinstance(block.get("signature"), str)
+                )
+            ]
 
         sanitized_message = dict(message)
         sanitized_message["content"] = sanitized_content or ""
@@ -156,6 +175,12 @@ def build_base_native_anthropic_request_body(
     if "max_tokens" not in body:
         body["max_tokens"] = default_max_tokens
 
+    if "messages" in body:
+        body["messages"] = sanitize_native_messages_thinking_policy(
+            body["messages"],
+            thinking_enabled=thinking_enabled,
+        )
+
     return body
 
 
@@ -178,7 +203,10 @@ def build_openrouter_native_request_body(
     if isinstance(request_extra, dict):
         body.update(request_extra)
 
-    body["messages"] = _strip_unsigned_thinking_history(body.get("messages"))
+    body["messages"] = sanitize_native_messages_thinking_policy(
+        body.get("messages"),
+        thinking_enabled=thinking_enabled,
+    )
     if "system" in body:
         body["system"] = _normalize_system_prompt_for_openrouter(body["system"])
     body["stream"] = True

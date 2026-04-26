@@ -116,17 +116,9 @@ class AnthropicToOpenAIConverter:
                 if include_reasoning_content:
                     thinking_parts.append(thinking)
             elif block_type == "redacted_thinking":
-                if not include_thinking:
-                    continue
-                if seen_tool_use:
-                    raise OpenAIConversionError(
-                        "OpenAI chat conversion does not support redacted_thinking after "
-                        "tool_use in the same message."
-                    )
-                data = get_block_attr(block, "data", "")
-                content_parts.append(f"<think>\n{data}\n</think>")
-                if include_reasoning_content:
-                    thinking_parts.append(str(data))
+                # Opaque provider continuation data; do not materialize as model-visible text
+                # or reasoning_content for OpenAI chat upstreams.
+                continue
             elif block_type == "tool_use":
                 seen_tool_use = True
                 tool_input = get_block_attr(block, "input", {})

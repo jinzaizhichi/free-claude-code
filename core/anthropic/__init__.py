@@ -11,6 +11,7 @@ from .errors import (
     format_user_error_preview,
     get_user_facing_error_message,
 )
+from .native_messages_request import sanitize_native_messages_thinking_policy
 from .provider_stream_error import iter_provider_stream_error_sse_events
 from .sse import ContentBlockManager, SSEBuilder, format_sse_event, map_stop_reason
 from .thinking import ContentChunk, ContentType, ThinkTagParser
@@ -38,5 +39,6 @@ __all__ = [
     "get_user_facing_error_message",
     "iter_provider_stream_error_sse_events",
     "map_stop_reason",
+    "sanitize_native_messages_thinking_policy",
     "set_if_not_none",
 ]

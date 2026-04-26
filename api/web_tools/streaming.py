@@ -21,7 +21,11 @@ from . import outbound
 from .constants import _MAX_FETCH_CHARS
 from .egress import WebFetchEgressPolicy
 from .parsers import extract_query, extract_url
-from .request import forced_server_tool_name, has_tool_named, request_text
+from .request import (
+    forced_server_tool_name,
+    forced_tool_turn_text,
+    has_tool_named,
+)
 
 
 def _search_summary(query: str, results: list[dict[str, str]]) -> str:
@@ -49,7 +53,7 @@ async def stream_web_server_tool_response(
     if tool_name is None or not has_tool_named(request, tool_name):
         return
 
-    text = request_text(request)
+    text = forced_tool_turn_text(request)
     message_id = f"msg_{uuid.uuid4()}"
     tool_id = f"srvtoolu_{uuid.uuid4().hex}"
     usage_key = (
