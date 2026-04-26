@@ -140,6 +140,10 @@ class MessagesRequest(BaseModel):
     tools: list[Tool] | None = None
     tool_choice: dict[str, Any] | None = None
     thinking: ThinkingConfig | None = None
+    # Native Anthropic / SDK client hints: ignored (not forwarded) for OpenAI Chat conversion.
+    context_management: dict[str, Any] | None = None
+    output_config: dict[str, Any] | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
     extra_body: dict[str, Any] | None = None
 
 
@@ -154,3 +158,6 @@ class TokenCountRequest(BaseModel):
     tools: list[Tool] | None = None
     thinking: ThinkingConfig | None = None
     tool_choice: dict[str, Any] | None = None
+    context_management: dict[str, Any] | None = None
+    output_config: dict[str, Any] | None = None
+    mcp_servers: list[dict[str, Any]] | None = None

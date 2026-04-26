@@ -1,6 +1,6 @@
 """SSE content_block ``type`` values for Anthropic web server tools (local handlers).
 
-Shared by :mod:`api.web_server_tools` and stream contract tests to avoid drift.
+Shared by :mod:`api.web_tools` and stream contract tests to avoid drift.
 """
 
 from __future__ import annotations

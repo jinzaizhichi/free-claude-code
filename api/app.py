@@ -33,7 +33,9 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
-    configure_logging(settings.log_file)
+    configure_logging(
+        settings.log_file, verbose_third_party=settings.log_raw_api_payloads
+    )
 
     app = FastAPI(
         title="Claude Code Proxy",

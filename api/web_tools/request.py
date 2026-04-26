@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from api.models.anthropic import MessagesRequest
+from api.models.anthropic import MessagesRequest, Tool
 
 
 def request_text(request: MessagesRequest) -> str:
@@ -48,3 +48,40 @@ def is_web_server_tool_request(request: MessagesRequest) -> bool:
     if forced is None:
         return False
     return has_tool_named(request, forced)
+
+
+def is_anthropic_server_tool_definition(tool: Tool) -> bool:
+    """Whether ``tool`` refers to an Anthropic server tool (web_search / web_fetch family)."""
+    name = (tool.name or "").strip()
+    if name in ("web_search", "web_fetch"):
+        return True
+    typ = tool.type
+    if isinstance(typ, str):
+        return typ.startswith("web_search") or typ.startswith("web_fetch")
+    return False
+
+
+def has_listed_anthropic_server_tools(request: MessagesRequest) -> bool:
+    """True when tools include web_search / web_fetch-style entries (listed, forced or not)."""
+    return any(is_anthropic_server_tool_definition(t) for t in (request.tools or []))
+
+
+def openai_chat_upstream_server_tool_error(
+    request: MessagesRequest, *, web_tools_enabled: bool
+) -> str | None:
+    """Return a user-facing error when OpenAI Chat upstream cannot satisfy server-tool semantics."""
+    forced = forced_server_tool_name(request)
+    if forced and not web_tools_enabled:
+        return (
+            f"tool_choice forces Anthropic server tool {forced!r}, but local web server tools are "
+            "disabled (ENABLE_WEB_SERVER_TOOLS=false). Enable them or use a native Anthropic "
+            "Messages transport (e.g. open_router, ollama, lmstudio)."
+        )
+    if not forced and has_listed_anthropic_server_tools(request):
+        return (
+            "OpenAI Chat upstreams (NVIDIA NIM, DeepSeek) cannot use listed Anthropic server tools "
+            "(web_search / web_fetch) without the local web server tool handler. Use a native "
+            "Anthropic transport, set ENABLE_WEB_SERVER_TOOLS=true and force the tool with "
+            "tool_choice, or remove these tools from the request."
+        )
+    return None

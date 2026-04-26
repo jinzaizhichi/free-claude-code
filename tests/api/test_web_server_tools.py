@@ -1,24 +1,25 @@
-import asyncio
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from starlette.responses import StreamingResponse
 
-import api.web_server_tools
 import api.web_tools.constants as web_tool_constants
 from api.models.anthropic import Message, MessagesRequest, Tool
 from api.services import ClaudeProxyService
-from api.web_server_tools import (
+from api.web_tools import egress as web_egress
+from api.web_tools.egress import (
     WebFetchEgressPolicy,
     WebFetchEgressViolation,
-    _run_web_fetch,
     enforce_web_fetch_egress,
-    is_web_server_tool_request,
-    stream_web_server_tool_response,
 )
-from api.web_tools import egress as web_egress
+from api.web_tools.outbound import (
+    _drain_response_body_capped,
+    _read_response_body_capped,
+    _run_web_fetch,
+)
+from api.web_tools.request import is_web_server_tool_request
+from api.web_tools.streaming import stream_web_server_tool_response
 from config.settings import Settings
 from core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
@@ -26,6 +27,7 @@ from core.anthropic.stream_contracts import (
     text_content,
 )
 from messaging.event_parser import parse_cli_event
+from providers.exceptions import InvalidRequestError
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
@@ -69,19 +71,34 @@ def test_web_server_tool_not_detected_when_forced_name_missing_from_tools():
     assert not is_web_server_tool_request(request)
 
 
-def test_service_routes_forced_web_tool_to_provider_when_disabled():
-    """Local web tools are opt-in; disabled means normal provider streaming."""
+def _make_fixed_provider_router(provider_id: str):
+    from api.model_router import ResolvedModel, RoutedMessagesRequest
+
+    class _Router:
+        def resolve_messages_request(
+            self, request: MessagesRequest
+        ) -> RoutedMessagesRequest:
+            resolved = ResolvedModel(
+                original_model=request.model,
+                provider_id=provider_id,
+                provider_model=request.model,
+                provider_model_ref=f"{provider_id}/{request.model}",
+                thinking_enabled=False,
+            )
+            return RoutedMessagesRequest(request=request, resolved=resolved)
+
+    return _Router()
+
+
+def test_service_rejects_forced_server_tool_on_openai_when_disabled():
+    """OpenAI Chat upstreams cannot run forced server tools without the local handler."""
     settings = Settings()
     assert settings.enable_web_server_tools is False
-    calls: list[int] = []
-
-    async def fake_stream(*_args, **_kwargs):
-        calls.append(1)
-        yield 'event: message_start\ndata: {"type":"message_start"}\n\n'
-
-    mock_provider = MagicMock()
-    mock_provider.stream_response = fake_stream
-    service = ClaudeProxyService(settings, provider_getter=lambda _: mock_provider)
+    service = ClaudeProxyService(
+        settings,
+        provider_getter=lambda _: MagicMock(),
+        model_router=_make_fixed_provider_router("nvidia_nim"),  # type: ignore[arg-type]
+    )
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -94,15 +111,8 @@ def test_service_routes_forced_web_tool_to_provider_when_disabled():
         tools=[Tool(name="web_search", type="web_search_20250305")],
         tool_choice={"type": "tool", "name": "web_search"},
     )
-    response = cast(StreamingResponse, service.create_message(request))
-    body = response.body_iterator
-
-    async def drain():
-        async for _chunk in body:
-            pass
-
-    asyncio.run(drain())
-    assert calls == [1]
+    with pytest.raises(InvalidRequestError, match="ENABLE_WEB_SERVER_TOOLS"):
+        service.create_message(request)
 
 
 @pytest.mark.parametrize(
@@ -544,7 +554,7 @@ async def test_read_response_body_capped_truncates_single_oversized_chunk():
     response = MagicMock()
     response.aiter_bytes = aiter_bytes
 
-    out = await api.web_server_tools._read_response_body_capped(response, cap)
+    out = await _read_response_body_capped(response, cap)
     assert len(out) == cap
     assert out == b"z" * cap
 
@@ -561,5 +571,47 @@ async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized
     response = MagicMock()
     response.aiter_bytes = aiter_bytes
 
-    await api.web_server_tools._drain_response_body_capped(response, cap)
+    await _drain_response_body_capped(response, cap)
     assert chunk_calls["n"] == 1
+
+
+def test_service_rejects_listed_server_tools_on_openai_chat() -> None:
+    settings = Settings()
+    service = ClaudeProxyService(
+        settings,
+        provider_getter=lambda _: MagicMock(),
+        model_router=_make_fixed_provider_router("deepseek"),  # type: ignore[arg-type]
+    )
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[Message(role="user", content="q")],
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+    )
+    with pytest.raises(InvalidRequestError, match="OpenAI Chat upstreams"):
+        service.create_message(request)
+
+
+def test_listed_server_tools_routed_on_open_router() -> None:
+    """Native Anthropic transport may receive listed server tool definitions."""
+    settings = Settings()
+
+    async def fake_stream(*_a, **_k):
+        yield 'event: message_start\ndata: {"type":"message_start"}\n\n'
+        yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+
+    mock_provider = MagicMock()
+    mock_provider.stream_response = fake_stream
+    service = ClaudeProxyService(
+        settings,
+        provider_getter=lambda _: mock_provider,
+        model_router=_make_fixed_provider_router("open_router"),  # type: ignore[arg-type]
+    )
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[Message(role="user", content="q")],
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+    )
+    service.create_message(request)
+    mock_provider.preflight_stream.assert_called()

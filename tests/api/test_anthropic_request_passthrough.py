@@ -164,3 +164,21 @@ def test_server_tool_assistant_blocks_round_trip_in_native_body() -> None:
     assert body["mcp_servers"][0]["type"] == "url"
     assert body["messages"][0]["content"][0]["type"] == "server_tool_use"
     assert body["messages"][0]["content"][1]["type"] == "web_search_tool_result"
+
+
+def test_native_body_preserves_context_and_output_config() -> None:
+    raw = {
+        "model": "m",
+        "max_tokens": 20,
+        "messages": [{"role": "user", "content": "x"}],
+        "context_management": {"edits": [{"type": "clear"}]},
+        "output_config": {"some": "hint"},
+    }
+    req = MessagesRequest.model_validate(raw)
+    body = build_base_native_anthropic_request_body(
+        req,
+        default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        thinking_enabled=False,
+    )
+    assert body["context_management"] == raw["context_management"]
+    assert body["output_config"] == raw["output_config"]

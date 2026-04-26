@@ -523,13 +523,31 @@ def test_convert_assistant_text_after_tool_use_raises():
         AnthropicToOpenAIConverter.convert_messages(messages)
 
 
-def test_openai_build_rejects_native_only_top_level_extras() -> None:
-    """OpenAI path must not silently drop e.g. ``mcp_servers`` from a native request."""
+def test_openai_build_accepts_declared_native_top_level_hints() -> None:
+    """OpenAI conversion ignores known non-OpenAI hints (e.g. context_management) without 400."""
     req = MessagesRequest.model_validate(
         {
             "model": "m",
             "messages": [{"role": "user", "content": "h"}],
+            "context_management": {"edits": []},
+            "output_config": {"foo": 1},
             "mcp_servers": [{"type": "url", "url": "https://x.com"}],
+        }
+    )
+    body = build_base_request_body(req, default_max_tokens=100)
+    assert "context_management" not in body
+    assert "output_config" not in body
+    assert "mcp_servers" not in body
+    assert body["model"] == "m"
+
+
+def test_openai_build_rejects_unknown_top_level_extras() -> None:
+    """Truly unknown keys must still be rejected (not dropped silently)."""
+    req = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "h"}],
+            "experimental_client_only_passthrough": True,
         }
     )
     with pytest.raises(OpenAIConversionError, match="top-level request fields"):

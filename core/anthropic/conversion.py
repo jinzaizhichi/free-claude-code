@@ -14,10 +14,11 @@ class OpenAIConversionError(Exception):
 
 
 def _openai_reject_native_only_top_level_fields(request_data: Any) -> None:
-    """OpenAI chat providers cannot accept arbitrary top-level Anthropic request fields.
+    """OpenAI chat providers may only convert known top-level request fields.
 
-    Request models with ``extra="allow"`` may carry native passthrough fields.
-    Those must be rejected for OpenAI conversion, not dropped silently.
+    First-class model fields (e.g. ``context_management``) are not forwarded to
+    the OpenAI API but are allowed so clients do not hit spurious 400s.
+    Unknown extra keys (``__pydantic_extra__``) are still rejected.
     """
     if not isinstance(request_data, BaseModel):
         return

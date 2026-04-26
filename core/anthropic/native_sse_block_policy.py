@@ -73,7 +73,7 @@ def _delta_type_to_block_kind(delta_type: Any) -> str | None:
     """Map a content_block_delta type to a content block kind (text/thinking/tool_use)."""
     if not isinstance(delta_type, str):
         return None
-    if delta_type == "thinking_delta":
+    if delta_type in {"thinking_delta", "signature_delta"}:
         return "thinking"
     if delta_type == "text_delta":
         return "text"

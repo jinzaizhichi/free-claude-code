@@ -24,6 +24,9 @@ _REQUEST_FIELDS = (
     "tools",
     "tool_choice",
     "thinking",
+    "context_management",
+    "output_config",
+    "mcp_servers",
     "extra_body",
 )
 
@@ -42,6 +45,9 @@ _OPENROUTER_EXTRA_BODY_FORBIDDEN_KEYS = frozenset(
         "top_k",
         "metadata",
         "stop_sequences",
+        "context_management",
+        "output_config",
+        "mcp_servers",
     }
 )
 

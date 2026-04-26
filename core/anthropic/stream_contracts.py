@@ -140,9 +140,14 @@ def assert_anthropic_stream_contract(
             delta = event.data.get("delta", {})
             assert isinstance(delta, dict), event.data
             delta_type = str(delta.get("type", ""))
+            if kind == "thinking":
+                assert delta_type in (
+                    "thinking_delta",
+                    "signature_delta",
+                ), f"block {index} is {kind}, got {delta_type}"
+                continue
             expected = {
                 "text": "text_delta",
-                "thinking": "thinking_delta",
                 "tool_use": "input_json_delta",
             }[kind]
             assert delta_type == expected, f"block {index} is {kind}, got {delta_type}"
