@@ -1,5 +1,6 @@
 """Tests for provider error mapping and core error formatting."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import openai
@@ -11,7 +12,10 @@ from core.anthropic import (
     format_user_error_preview,
     get_user_facing_error_message,
 )
-from providers.error_mapping import map_error
+from providers.error_mapping import (
+    map_error,
+    user_visible_message_for_mapped_provider_error,
+)
 from providers.exceptions import (
     APIError,
     AuthenticationError,
@@ -105,27 +109,6 @@ class TestMapError:
         result = map_error(exc)
         assert result is exc
 
-    @pytest.mark.parametrize(
-        "exc_cls,expected_cls",
-        [
-            (openai.AuthenticationError, AuthenticationError),
-            (openai.RateLimitError, RateLimitError),
-            (openai.BadRequestError, InvalidRequestError),
-        ],
-        ids=["auth", "rate_limit", "bad_request"],
-    )
-    def test_mapping_parametrized(self, exc_cls, expected_cls):
-        """Parametrized check of openai -> provider error mapping."""
-        status_map = {
-            openai.AuthenticationError: 401,
-            openai.RateLimitError: 429,
-            openai.BadRequestError: 400,
-        }
-        exc = _make_openai_error(exc_cls, status_code=status_map[exc_cls])
-        with patch("providers.error_mapping.GlobalRateLimiter"):
-            result = map_error(exc)
-        assert isinstance(result, expected_cls)
-
 
 def test_user_facing_message_read_timeout_empty_string():
     """ReadTimeout wrapping TimeoutError should still produce readable text."""
@@ -153,3 +136,20 @@ def test_format_user_error_preview_truncates():
     preview = format_user_error_preview(exc, max_len=20)
     assert len(preview) == 20
     assert preview == "x" * 20
+
+
+def test_user_visible_message_for_mapped_provider_error_405():
+    mapped = APIError("ignored", status_code=405, raw_error="")
+    msg = user_visible_message_for_mapped_provider_error(
+        mapped, provider_name="ACME", read_timeout_s=30.0
+    )
+    assert "ACME" in msg and "405" in msg
+
+
+def test_streaming_transports_pass_scoped_rate_limiter_to_map_error():
+    """Guardrail: streaming adapters must scope reactive 429 handling per provider."""
+    root = Path(__file__).resolve().parents[2]
+    for name in ("anthropic_messages.py", "openai_compat.py"):
+        text = (root / "providers" / name).read_text(encoding="utf-8")
+        assert "map_error(" in text, name
+        assert "rate_limiter=self._global_rate_limiter" in text, name

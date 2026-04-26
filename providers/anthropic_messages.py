@@ -8,13 +8,17 @@ from typing import Any, Literal
 import httpx
 from loguru import logger
 
-from config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-from core.anthropic import (
-    get_user_facing_error_message,
-    iter_provider_stream_error_sse_events,
+from config.constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    NATIVE_MESSAGES_ERROR_BODY_LOG_CAP_BYTES,
 )
+from core.anthropic import iter_provider_stream_error_sse_events
+from core.anthropic.emitted_sse_tracker import EmittedNativeSseTracker
 from providers.base import BaseProvider, ProviderConfig
-from providers.error_mapping import map_error
+from providers.error_mapping import (
+    map_error,
+    user_visible_message_for_mapped_provider_error,
+)
 from providers.rate_limit import GlobalRateLimiter
 
 StreamChunkMode = Literal["line", "event"]
@@ -97,42 +101,68 @@ class AnthropicMessagesTransport(BaseProvider):
     async def _raise_for_status(
         self, response: httpx.Response, *, req_tag: str
     ) -> None:
-        """Raise for non-200 responses after logging safe metadata (or full body if opted in)."""
+        """Raise for non-200 responses after logging safe metadata (or capped body if opted in)."""
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as error:
-            body_preview = await self._read_error_body_bytes(response)
-            if body_preview is not None:
-                if self._config.log_api_error_tracebacks:
-                    text = body_preview.decode("utf-8", errors="replace")
+            if self._config.log_api_error_tracebacks:
+                preview, truncated = await self._read_error_body_preview(
+                    response, NATIVE_MESSAGES_ERROR_BODY_LOG_CAP_BYTES
+                )
+                if preview:
+                    text = preview.decode("utf-8", errors="replace")
                     logger.error(
-                        "{}_ERROR:{} HTTP {}: {}",
+                        "{}_ERROR:{} HTTP {} body_preview_bytes={} truncated={}: {}",
                         self._provider_name,
                         req_tag,
                         response.status_code,
+                        len(preview),
+                        truncated,
                         text,
                     )
                 else:
                     logger.error(
-                        "{}_ERROR:{} HTTP {} body_bytes={}",
+                        "{}_ERROR:{} HTTP {} (empty error body)",
                         self._provider_name,
                         req_tag,
                         response.status_code,
-                        len(body_preview),
                     )
+            else:
+                cl = response.headers.get("content-length", "").strip()
+                extra = f" content_length_declared={cl}" if cl.isdigit() else ""
+                logger.error(
+                    "{}_ERROR:{} HTTP {}{}",
+                    self._provider_name,
+                    req_tag,
+                    response.status_code,
+                    extra,
+                )
             raise error
 
-    async def _read_error_body_bytes(self, response: httpx.Response) -> bytes | None:
-        """Read raw error response bytes for logging (caller decides verbosity)."""
-        aread = getattr(response, "aread", None)
-        if aread is None:
-            return None
-        body = await aread()
-        if isinstance(body, bytes):
-            return body
-        if body:
-            return str(body).encode("utf-8", errors="replace")
-        return b""
+    async def _read_error_body_preview(
+        self, response: httpx.Response, max_bytes: int
+    ) -> tuple[bytes, bool]:
+        """Read at most ``max_bytes`` from the error body for logging. Returns (preview, truncated)."""
+        if max_bytes <= 0:
+            return b"", False
+        received = 0
+        parts: list[bytes] = []
+        truncated = False
+        async for chunk in response.aiter_bytes(chunk_size=65_536):
+            if received >= max_bytes:
+                truncated = True
+                break
+            remaining = max_bytes - received
+            take = chunk if len(chunk) <= remaining else chunk[:remaining]
+            if take:
+                parts.append(take)
+            received += len(take)
+            if len(chunk) > len(take):
+                truncated = True
+                break
+            if received >= max_bytes:
+                break
+        return (b"".join(parts), truncated)
 
     async def _iter_sse_lines(self, response: httpx.Response) -> AsyncIterator[str]:
         """Yield raw SSE line chunks preserving local provider behavior."""
@@ -178,15 +208,11 @@ class AnthropicMessagesTransport(BaseProvider):
     def _get_error_message(self, error: Exception, request_id: str | None) -> str:
         """Map an exception into a user-facing provider error message."""
         mapped_error = map_error(error, rate_limiter=self._global_rate_limiter)
-        if getattr(mapped_error, "status_code", None) == 405:
-            base_message = (
-                f"Upstream provider {self._provider_name} rejected the request method "
-                "or endpoint (HTTP 405)."
-            )
-        else:
-            base_message = get_user_facing_error_message(
-                mapped_error, read_timeout_s=self._config.http_read_timeout
-            )
+        base_message = user_visible_message_for_mapped_provider_error(
+            mapped_error,
+            provider_name=self._provider_name,
+            read_timeout_s=self._config.http_read_timeout,
+        )
         return self._format_error_message(base_message, request_id)
 
     def _emit_error_events(
@@ -254,6 +280,7 @@ class AnthropicMessagesTransport(BaseProvider):
         response: httpx.Response | None = None
         sent_any_event = False
         state = self._new_stream_state(request, thinking_enabled=thinking_enabled)
+        emitted_tracker = EmittedNativeSseTracker()
 
         async with self._global_rate_limiter.concurrency_slot():
             try:
@@ -270,6 +297,7 @@ class AnthropicMessagesTransport(BaseProvider):
                     thinking_enabled=thinking_enabled,
                 ):
                     sent_any_event = True
+                    emitted_tracker.feed(chunk)
                     yield chunk
 
             except Exception as error:
@@ -286,13 +314,24 @@ class AnthropicMessagesTransport(BaseProvider):
                     type(error).__name__,
                     req_tag,
                 )
-                for event in self._emit_error_events(
-                    request=request,
-                    input_tokens=input_tokens,
-                    error_message=error_message,
-                    sent_any_event=sent_any_event,
-                ):
-                    yield event
+                if sent_any_event:
+                    for event in emitted_tracker.iter_close_unclosed_blocks():
+                        yield event
+                    for event in emitted_tracker.iter_midstream_error_tail(
+                        error_message,
+                        request=request,
+                        input_tokens=input_tokens,
+                        log_raw_sse_events=self._config.log_raw_sse_events,
+                    ):
+                        yield event
+                else:
+                    for event in self._emit_error_events(
+                        request=request,
+                        input_tokens=input_tokens,
+                        error_message=error_message,
+                        sent_any_event=False,
+                    ):
+                        yield event
                 return
             finally:
                 if response is not None and not response.is_closed:

@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from config.constants import NATIVE_MESSAGES_ERROR_BODY_LOG_CAP_BYTES
 from config.nim import NimSettings
 from providers.anthropic_messages import AnthropicMessagesTransport
 from providers.base import ProviderConfig
 from providers.nvidia_nim import NvidiaNimProvider
+from tests.provider_request_mocks import make_openai_compat_stream_request
 from tests.providers.test_anthropic_messages import (
     FakeResponse,
     MockRequest,
@@ -70,7 +72,8 @@ async def test_native_non_200_logs_exclude_body_text_by_default(
 
     messages = " | ".join(r.getMessage() for r in caplog.records)
     assert "SECRET_UPSTREAM_BODY" not in messages
-    assert "body_bytes=" in messages
+    assert "HTTP 500" in messages
+    assert "body_preview_bytes=" not in messages
 
 
 @pytest.mark.asyncio
@@ -94,6 +97,63 @@ async def test_native_non_200_logs_body_when_verbose(caplog, provider_config):
 
     messages = " | ".join(r.getMessage() for r in caplog.records)
     assert "SECRET_UPSTREAM_BODY" in messages
+    assert "truncated=False" in messages
+
+
+@pytest.mark.asyncio
+async def test_native_non_200_verbose_logs_only_capped_error_body(
+    caplog, provider_config
+):
+    provider_config.log_api_error_tracebacks = True
+    provider = NativeProvider(provider_config)
+    req = MockRequest()
+    tail = "SECRET_TAIL_NOT_LOGGED"
+    huge = f"{'A' * (NATIVE_MESSAGES_ERROR_BODY_LOG_CAP_BYTES + 50)}{tail}"
+    response = FakeResponse(status_code=500, text=huge)
+
+    with (
+        patch.object(provider._client, "build_request", return_value=MagicMock()),
+        patch.object(
+            provider._client,
+            "send",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        caplog.at_level(logging.ERROR),
+    ):
+        _ = [e async for e in provider.stream_response(req)]
+
+    messages = " | ".join(r.getMessage() for r in caplog.records)
+    assert "SECRET_TAIL_NOT_LOGGED" not in messages
+    assert "truncated=True" in messages
+    assert f"body_preview_bytes={NATIVE_MESSAGES_ERROR_BODY_LOG_CAP_BYTES}" in messages
+
+
+@pytest.mark.asyncio
+async def test_native_non_200_default_does_not_read_oversized_body(
+    caplog, provider_config
+):
+    provider = NativeProvider(provider_config)
+    req = MockRequest()
+    huge = f"{'Z' * 500_000}LEAK_MARKER"
+    response = FakeResponse(status_code=500, text=huge)
+
+    with (
+        patch.object(provider._client, "build_request", return_value=MagicMock()),
+        patch.object(
+            provider._client,
+            "send",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+        caplog.at_level(logging.ERROR),
+    ):
+        _ = [e async for e in provider.stream_response(req)]
+
+    messages = " | ".join(r.getMessage() for r in caplog.records)
+    assert "LEAK_MARKER" not in messages
+    assert "ZZZ" not in messages
+    assert "HTTP 500" in messages
 
 
 @pytest.mark.asyncio
@@ -134,25 +194,6 @@ async def test_native_stream_failure_logs_exclude_exception_str_by_default(
     assert "http_status=None" in messages
 
 
-def _nim_request():
-    req = MagicMock()
-    req.model = "test-model"
-    req.stream = True
-    req.messages = []
-    req.system = None
-    req.tools = None
-    req.tool_choice = None
-    req.metadata = None
-    req.max_tokens = 4096
-    req.temperature = None
-    req.top_p = None
-    req.top_k = None
-    req.stop_sequences = None
-    req.extra_body = None
-    req.thinking = None
-    return req
-
-
 @pytest.mark.asyncio
 async def test_openai_compat_stream_failure_default_logs_exclude_exception_str(caplog):
     config = ProviderConfig(
@@ -161,7 +202,7 @@ async def test_openai_compat_stream_failure_default_logs_exclude_exception_str(c
         log_api_error_tracebacks=False,
     )
     provider = NvidiaNimProvider(config, nim_settings=NimSettings())
-    req = _nim_request()
+    req = make_openai_compat_stream_request()
 
     @asynccontextmanager
     async def _noop_slot():
@@ -196,7 +237,7 @@ async def test_openai_compat_stream_failure_respects_verbose_flag(caplog):
         log_api_error_tracebacks=True,
     )
     provider = NvidiaNimProvider(config, nim_settings=NimSettings())
-    req = _nim_request()
+    req = make_openai_compat_stream_request()
 
     @asynccontextmanager
     async def _noop_slot():

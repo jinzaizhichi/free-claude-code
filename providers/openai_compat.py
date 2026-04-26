@@ -21,11 +21,13 @@ from core.anthropic import (
     SSEBuilder,
     ThinkTagParser,
     append_request_id,
-    get_user_facing_error_message,
     map_stop_reason,
 )
 from providers.base import BaseProvider, ProviderConfig
-from providers.error_mapping import map_error
+from providers.error_mapping import (
+    map_error,
+    user_visible_message_for_mapped_provider_error,
+)
 from providers.rate_limit import GlobalRateLimiter
 
 
@@ -230,8 +232,6 @@ class OpenAIChatTransport(BaseProvider):
         heuristic_parser = HeuristicToolParser()
         finish_reason = None
         usage_info = None
-        error_occurred = False
-        error_message = ""
 
         async with self._global_rate_limiter.concurrency_slot():
             try:
@@ -313,16 +313,11 @@ class OpenAIChatTransport(BaseProvider):
             except Exception as e:
                 self._log_stream_transport_error(tag, req_tag, e)
                 mapped_e = map_error(e, rate_limiter=self._global_rate_limiter)
-                error_occurred = True
-                if getattr(mapped_e, "status_code", None) == 405:
-                    base_message = (
-                        f"Upstream provider {tag} rejected the request method "
-                        "or endpoint (HTTP 405)."
-                    )
-                else:
-                    base_message = get_user_facing_error_message(
-                        mapped_e, read_timeout_s=self._config.http_read_timeout
-                    )
+                base_message = user_visible_message_for_mapped_provider_error(
+                    mapped_e,
+                    provider_name=tag,
+                    read_timeout_s=self._config.http_read_timeout,
+                )
                 error_message = append_request_id(base_message, request_id)
                 logger.info(
                     "{}_STREAM: Emitting SSE error event for {}{}",
@@ -330,10 +325,13 @@ class OpenAIChatTransport(BaseProvider):
                     type(e).__name__,
                     req_tag,
                 )
-                for event in sse.close_content_blocks():
+                for event in sse.close_all_blocks():
                     yield event
                 for event in sse.emit_error(error_message):
                     yield event
+                yield sse.message_delta("end_turn", 1)
+                yield sse.message_stop()
+                return
 
         # Flush remaining content
         remaining = think_parser.flush()
@@ -354,11 +352,7 @@ class OpenAIChatTransport(BaseProvider):
             for event in _iter_heuristic_tool_use_sse(sse, tool_use):
                 yield event
 
-        if (
-            not error_occurred
-            and sse.blocks.text_index == -1
-            and not sse.blocks.tool_states
-        ):
+        if sse.blocks.text_index == -1 and not sse.blocks.tool_states:
             for event in sse.ensure_text_block():
                 yield event
             yield sse.emit_text_delta(" ")

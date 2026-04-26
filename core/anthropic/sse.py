@@ -1,5 +1,6 @@
 """SSE event builder for Anthropic-format streaming responses."""
 
+import hashlib
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -116,13 +117,15 @@ class ContentBlockManager:
                 args_json = json.loads(state.task_arg_buffer)
                 _normalize_task_run_in_background(args_json)
                 out = json.dumps(args_json)
-            except Exception as e:
-                prefix = state.task_arg_buffer[:120]
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                digest = hashlib.sha256(
+                    state.task_arg_buffer.encode("utf-8", errors="replace")
+                ).hexdigest()[:16]
                 logger.warning(
-                    "Task args invalid JSON (id={} len={} prefix={!r}): {}",
+                    "Task args invalid JSON (id={} len={} buffer_sha256_prefix={}): {}",
                     state.tool_id or "unknown",
                     len(state.task_arg_buffer),
-                    prefix,
+                    digest,
                     e,
                 )
 

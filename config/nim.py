@@ -16,7 +16,9 @@ class NimSettings(BaseModel):
     )
     top_k: int = -1
     max_tokens: int = Field(
-        81920, ge=1, description="Maximum number of tokens in output."
+        ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ge=1,
+        description="Maximum number of tokens in output.",
     )
     presence_penalty: float = Field(0.0, ge=-2.0, le=2.0)
     frequency_penalty: float = Field(0.0, ge=-2.0, le=2.0)
@@ -101,7 +103,7 @@ class NimSettings(BaseModel):
             return None
         try:
             return int(v)
-        except Exception as err:
+        except (TypeError, ValueError) as err:
             raise ValueError(
                 f"{info.field_name} must be an int or empty/None."
             ) from err

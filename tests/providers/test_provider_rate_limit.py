@@ -27,11 +27,11 @@ class TestProviderRateLimiter:
         GlobalRateLimiter.reset_instance()
         limiter = GlobalRateLimiter.get_instance(rate_limit=1, rate_window=0.25)
 
-        start_time = time.time()
+        start_time = time.monotonic()
 
         async def call_limiter():
             await limiter.wait_if_blocked()
-            return time.time()
+            return time.monotonic()
 
         # 5 requests.
         # R0 -> 0s
@@ -41,7 +41,7 @@ class TestProviderRateLimiter:
         # R4 -> 1.00s
         results = [await call_limiter() for _ in range(5)]
 
-        total_time = time.time() - start_time
+        total_time = time.monotonic() - start_time
 
         assert len(results) == 5
         # Should take at least ~1.0s
@@ -56,7 +56,7 @@ class TestProviderRateLimiter:
         GlobalRateLimiter.reset_instance()
         limiter = GlobalRateLimiter.get_instance()
 
-        start_time = time.time()
+        start_time = time.monotonic()
 
         # Manually block for 1.5s
         block_time = 1.5
@@ -71,7 +71,7 @@ class TestProviderRateLimiter:
         # They should both wait for the block time
         results = await asyncio.gather(call_limiter(), call_limiter())
 
-        total_time = time.time() - start_time
+        total_time = time.monotonic() - start_time
 
         # Both should report having waited reactively
         assert all(results) is True
@@ -121,10 +121,10 @@ class TestProviderRateLimiter:
         GlobalRateLimiter.reset_instance()
         limiter = GlobalRateLimiter.get_instance(rate_limit=10000, rate_window=60)
 
-        start = time.time()
+        start = time.monotonic()
         for _ in range(20):
             await limiter.wait_if_blocked()
-        duration = time.time() - start
+        duration = time.monotonic() - start
 
         # 20 requests with 10000 limit should be near-instant
         assert duration < 1.0, f"High rate limit caused throttling: {duration:.2f}s"

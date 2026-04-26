@@ -108,12 +108,11 @@ class GlobalRateLimiter:
             logger.info(
                 "Rebuilding provider rate limiter for updated scope '{}'", scope
             )
-        if scope not in cls._scoped_instances or existing:
-            cls._scoped_instances[scope] = cls(
-                rate_limit=desired_rate_limit,
-                rate_window=desired_rate_window,
-                max_concurrency=max_concurrency,
-            )
+        cls._scoped_instances[scope] = cls(
+            rate_limit=desired_rate_limit,
+            rate_window=desired_rate_window,
+            max_concurrency=max_concurrency,
+        )
         return cls._scoped_instances[scope]
 
     @classmethod

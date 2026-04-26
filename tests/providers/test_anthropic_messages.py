@@ -7,6 +7,8 @@ import httpx
 import pytest
 
 from config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from core.anthropic.sse import format_sse_event
+from core.anthropic.stream_contracts import event_index, parse_sse_text
 from providers.anthropic_messages import AnthropicMessagesTransport
 from providers.base import ProviderConfig
 from tests.stream_contract import assert_canonical_stream_error_envelope
@@ -42,16 +44,30 @@ class MockRequest:
 
 
 class FakeResponse:
-    def __init__(self, *, status_code=200, lines=None, text=""):
+    def __init__(
+        self,
+        *,
+        status_code=200,
+        lines=None,
+        text="",
+        raise_after_line_index: int | None = None,
+    ):
         self.status_code = status_code
         self._lines = lines or []
         self._text = text
+        self._raise_after_line_index = raise_after_line_index
         self.is_closed = False
         self.request = httpx.Request("POST", "https://example.test/v1/messages")
+        self.headers = httpx.Headers()
 
     async def aiter_lines(self):
-        for line in self._lines:
+        for i, line in enumerate(self._lines):
             yield line
+            if (
+                self._raise_after_line_index is not None
+                and i >= self._raise_after_line_index
+            ):
+                raise RuntimeError("mid-stream failure")
 
     async def aread(self):
         return self._text.encode()
@@ -66,6 +82,11 @@ class FakeResponse:
 
     async def aclose(self):
         self.is_closed = True
+
+    async def aiter_bytes(self, chunk_size: int = 65_536):
+        data = self._text.encode("utf-8")
+        for offset in range(0, len(data), chunk_size):
+            yield data[offset : offset + chunk_size]
 
 
 @pytest.fixture
@@ -213,3 +234,61 @@ async def test_stream_maps_non_200_to_error_event_and_closes_response(
     )
     blob = "".join(events)
     assert "REQ_123" in blob
+
+
+@pytest.mark.asyncio
+async def test_midstream_error_closes_open_block_and_uses_fresh_content_index(
+    provider_config,
+):
+    """After upstream message_start + content_block_start, synthetic errors must not reuse index 0."""
+    provider = NativeProvider(provider_config)
+    req = MockRequest()
+    mid = "msg_midstream_err"
+    msg_start = format_sse_event(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": mid,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "test-model",
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+    )
+    block_start = format_sse_event(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+    )
+    lines: list[str] = []
+    for blob in (msg_start, block_start):
+        lines.extend(blob.splitlines())
+    response = FakeResponse(lines=lines, raise_after_line_index=len(lines) - 1)
+
+    with (
+        patch.object(provider._client, "build_request", return_value=MagicMock()),
+        patch.object(
+            provider._client,
+            "send",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+    ):
+        events = [e async for e in provider.stream_response(req)]
+
+    assert_canonical_stream_error_envelope(
+        events, user_message_substr="mid-stream failure"
+    )
+    parsed = parse_sse_text("".join(events))
+    starts = [e for e in parsed if e.event == "content_block_start"]
+    assert event_index(starts[0]) == 0
+    assert event_index(starts[-1]) == 1
+    assert {event_index(e) for e in parsed if e.event == "content_block_stop"} == {0, 1}

@@ -416,13 +416,16 @@ async def test_read_response_body_capped_truncates_single_oversized_chunk():
 
 
 @pytest.mark.asyncio
-async def test_drain_response_body_capped_counts_truncated_chunk():
+async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized():
     cap = 300
+    chunk_calls = {"n": 0}
 
     async def aiter_bytes(chunk_size=None):
+        chunk_calls["n"] += 1
         yield b"y" * (cap * 10)
 
     response = MagicMock()
     response.aiter_bytes = aiter_bytes
 
     await api.web_server_tools._drain_response_body_capped(response, cap)
+    assert chunk_calls["n"] == 1

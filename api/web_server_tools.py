@@ -248,32 +248,37 @@ def _safe_public_host_for_logs(url: str) -> str:
     return host[:253]
 
 
-async def _drain_response_body_capped(response: httpx.Response, max_bytes: int) -> None:
+async def _iter_response_body_under_cap(
+    response: httpx.Response, max_bytes: int
+) -> AsyncIterator[bytes]:
+    """Yield successive body slices whose total size is at most ``max_bytes``."""
+    if max_bytes <= 0:
+        return
     received = 0
     async for chunk in response.aiter_bytes(chunk_size=65_536):
         if received >= max_bytes:
             break
         remaining = max_bytes - received
-        take = chunk if len(chunk) <= remaining else chunk[:remaining]
-        received += len(take)
-        if received >= max_bytes:
+        if len(chunk) <= remaining:
+            received += len(chunk)
+            yield chunk
+            if received >= max_bytes:
+                break
+        else:
+            yield chunk[:remaining]
             break
+
+
+async def _drain_response_body_capped(response: httpx.Response, max_bytes: int) -> None:
+    async for _ in _iter_response_body_under_cap(response, max_bytes):
+        pass
 
 
 async def _read_response_body_capped(response: httpx.Response, max_bytes: int) -> bytes:
     """Read at most ``max_bytes`` without retaining more than one chunk over the cap."""
-    parts: list[bytes] = []
-    total = 0
-    async for chunk in response.aiter_bytes(chunk_size=65_536):
-        if total >= max_bytes:
-            break
-        remaining = max_bytes - total
-        if len(chunk) > remaining:
-            parts.append(chunk[:remaining])
-            break
-        parts.append(chunk)
-        total += len(chunk)
-    return b"".join(parts)
+    return b"".join(
+        [piece async for piece in _iter_response_body_under_cap(response, max_bytes)]
+    )
 
 
 def _log_web_tool_failure(
