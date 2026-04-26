@@ -141,6 +141,26 @@ def test_build_request_body_is_native_anthropic(open_router_provider):
     assert "extra_body" not in body
 
 
+def test_openrouter_extra_body_rejects_overriding_reserved_fields() -> None:
+    from providers.exceptions import InvalidRequestError
+    from providers.open_router.request import build_request_body
+
+    r = MockRequest()
+    r.extra_body = {"model": "hijack"}
+    with pytest.raises(InvalidRequestError, match="model"):
+        build_request_body(r, thinking_enabled=True)
+
+
+def test_openrouter_extra_body_allows_openrouter_only_keys() -> None:
+    from providers.open_router.request import build_request_body
+
+    r = MockRequest()
+    r.extra_body = {"transforms": ["no-web"], "plugins": []}
+    body = build_request_body(r, thinking_enabled=False)
+    assert body["transforms"] == ["no-web"]
+    assert body["plugins"] == []
+
+
 def test_build_request_body_omits_reasoning_when_globally_disabled(
     open_router_config,
 ):

@@ -27,6 +27,40 @@ _REQUEST_FIELDS = (
     "extra_body",
 )
 
+# Keys that would override routed canonical request fields if merged from ``extra_body``.
+_OPENROUTER_EXTRA_BODY_FORBIDDEN_KEYS = frozenset(
+    {
+        "model",
+        "messages",
+        "system",
+        "tools",
+        "tool_choice",
+        "stream",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "metadata",
+        "stop_sequences",
+    }
+)
+
+
+class OpenRouterExtraBodyError(ValueError):
+    """``extra_body`` contained reserved keys that would override canonical fields."""
+
+
+def validate_openrouter_extra_body(extra: Any) -> None:
+    """Reject ``extra_body`` keys that must not override routed request fields."""
+    if not isinstance(extra, dict) or not extra:
+        return
+    bad = _OPENROUTER_EXTRA_BODY_FORBIDDEN_KEYS & extra.keys()
+    if bad:
+        raise OpenRouterExtraBodyError(
+            f"extra_body must not override canonical request fields: {sorted(bad)}"
+        )
+
+
 _INTERNAL_FIELDS = {
     "thinking",
     "extra_body",
@@ -201,6 +235,7 @@ def build_openrouter_native_request_body(
     }
 
     if isinstance(request_extra, dict):
+        validate_openrouter_extra_body(request_extra)
         body.update(request_extra)
 
     body["messages"] = sanitize_native_messages_thinking_policy(

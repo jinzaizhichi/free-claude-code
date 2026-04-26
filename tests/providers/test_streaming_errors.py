@@ -1,13 +1,17 @@
 """Tests for streaming error handling in providers/nvidia_nim/client.py."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from config.nim import NimSettings
-from core.anthropic.stream_contracts import parse_sse_text
+from core.anthropic.stream_contracts import (
+    assert_anthropic_stream_contract,
+    parse_sse_text,
+)
 from providers.base import ProviderConfig
 from providers.nvidia_nim import NvidiaNimProvider
 from tests.provider_request_mocks import make_openai_compat_stream_request
@@ -713,3 +717,36 @@ class TestStreamChunkEdgeCases:
         event_text = "".join(events1 + events2 + flushed)
         assert "tool_use" in event_text
         assert "{}" in event_text
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arrives() -> (
+    None
+):
+    """Nameless / incomplete tool-call buffer must not break Anthropic stream contract."""
+    provider = _make_provider()
+    request = _make_request()
+    tc0 = SimpleNamespace(
+        index=0,
+        id="call_inc",
+        function=SimpleNamespace(name=None, arguments="{}"),
+    )
+    stream_mock = AsyncStreamMock([_make_chunk(tool_calls=[tc0])])
+    with (
+        patch.object(
+            provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=stream_mock,
+        ),
+        patch.object(
+            provider._global_rate_limiter,
+            "wait_if_blocked",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        events = await _collect_stream(provider, request)
+    text = "".join(events)
+    assert_anthropic_stream_contract(parse_sse_text(text))
+    assert "text_delta" in text

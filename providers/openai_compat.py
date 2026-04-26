@@ -376,7 +376,13 @@ class OpenAIChatTransport(BaseProvider):
             for event in _iter_heuristic_tool_use_sse(sse, tool_use):
                 yield event
 
-        if sse.blocks.text_index == -1 and not sse.blocks.tool_states:
+        has_started_tool = any(s.started for s in sse.blocks.tool_states.values())
+        has_content_blocks = (
+            sse.blocks.text_index != -1
+            or sse.blocks.thinking_index != -1
+            or has_started_tool
+        )
+        if not has_content_blocks:
             for event in sse.ensure_text_block():
                 yield event
             yield sse.emit_text_delta(" ")

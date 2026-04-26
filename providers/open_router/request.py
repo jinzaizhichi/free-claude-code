@@ -9,7 +9,11 @@ from loguru import logger
 from config.constants import (
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS as OPENROUTER_DEFAULT_MAX_TOKENS,
 )
-from core.anthropic.native_messages_request import build_openrouter_native_request_body
+from core.anthropic.native_messages_request import (
+    OpenRouterExtraBodyError,
+    build_openrouter_native_request_body,
+)
+from providers.exceptions import InvalidRequestError
 
 
 def build_request_body(request_data: Any, *, thinking_enabled: bool) -> dict:
@@ -20,11 +24,14 @@ def build_request_body(request_data: Any, *, thinking_enabled: bool) -> dict:
         len(getattr(request_data, "messages", [])),
     )
 
-    body = build_openrouter_native_request_body(
-        request_data,
-        thinking_enabled=thinking_enabled,
-        default_max_tokens=OPENROUTER_DEFAULT_MAX_TOKENS,
-    )
+    try:
+        body = build_openrouter_native_request_body(
+            request_data,
+            thinking_enabled=thinking_enabled,
+            default_max_tokens=OPENROUTER_DEFAULT_MAX_TOKENS,
+        )
+    except OpenRouterExtraBodyError as exc:
+        raise InvalidRequestError(str(exc)) from exc
 
     logger.debug(
         "OPENROUTER_REQUEST: conversion done model={} msgs={} tools={}",

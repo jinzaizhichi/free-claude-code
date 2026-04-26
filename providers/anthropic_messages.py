@@ -17,6 +17,10 @@ from core.anthropic.emitted_sse_tracker import EmittedNativeSseTracker
 from core.anthropic.native_messages_request import (
     build_base_native_anthropic_request_body,
 )
+from core.anthropic.native_sse_block_policy import (
+    NativeSseBlockPolicyState,
+    transform_native_sse_block_event,
+)
 from providers.base import BaseProvider, ProviderConfig
 from providers.error_mapping import (
     map_error,
@@ -178,6 +182,8 @@ class AnthropicMessagesTransport(BaseProvider):
 
     def _new_stream_state(self, request: Any, *, thinking_enabled: bool) -> Any:
         """Return per-stream provider state for event transformation."""
+        if self.stream_chunk_mode == "line":
+            return NativeSseBlockPolicyState()
         return None
 
     def _transform_stream_event(
@@ -188,6 +194,10 @@ class AnthropicMessagesTransport(BaseProvider):
         thinking_enabled: bool,
     ) -> str | None:
         """Transform or drop a grouped SSE event before yielding it downstream."""
+        if isinstance(state, NativeSseBlockPolicyState):
+            return transform_native_sse_block_event(
+                event, state, thinking_enabled=thinking_enabled
+            )
         return event
 
     def _format_error_message(self, base_message: str, request_id: str | None) -> str:
@@ -231,6 +241,21 @@ class AnthropicMessagesTransport(BaseProvider):
         thinking_enabled: bool,
     ) -> AsyncIterator[str]:
         """Yield stream chunks according to the provider's observable chunk shape."""
+        if self.stream_chunk_mode == "line" and isinstance(
+            state, NativeSseBlockPolicyState
+        ):
+            async for event in self._iter_sse_events(response):
+                output_event = self._transform_stream_event(
+                    event,
+                    state,
+                    thinking_enabled=thinking_enabled,
+                )
+                if output_event is None:
+                    continue
+                for line in output_event.splitlines(keepends=True):
+                    yield line
+            return
+
         if self.stream_chunk_mode == "line":
             async for chunk in self._iter_sse_lines(response):
                 yield chunk

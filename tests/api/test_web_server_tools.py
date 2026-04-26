@@ -1,5 +1,5 @@
 import asyncio
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,6 +18,7 @@ from api.web_server_tools import (
     is_web_server_tool_request,
     stream_web_server_tool_response,
 )
+from api.web_tools import egress as web_egress
 from config.settings import Settings
 from core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
@@ -150,47 +151,90 @@ def _stream_cm(response: httpx.Response) -> MagicMock:
     return cm
 
 
-def test_enforce_web_fetch_egress_documents_dns_time_of_use_risk():
-    assert (
-        enforce_web_fetch_egress.__doc__
-        and "time-of-check" in enforce_web_fetch_egress.__doc__
+def _aiohttp_response(
+    status: int,
+    *,
+    url: str = "http://8.8.8.8/",
+    location: str | None = None,
+    body: bytes = b"hello world",
+) -> MagicMock:
+    r = MagicMock()
+    r.status = status
+    r.url = url
+    hdrs: dict[str, str] = {}
+    if location is not None:
+        hdrs["location"] = location
+    r.headers = hdrs
+    r.get_encoding = MagicMock(return_value="utf-8")
+    r.raise_for_status = MagicMock()
+    r.request_info = MagicMock()
+    r.history = ()
+
+    async def iter_chunked(_n: int) -> Any:
+        yield body
+
+    r.content.iter_chunked = MagicMock(side_effect=iter_chunked)
+    return r
+
+
+def _aiohttp_client_session_patch(
+    *responses: MagicMock,
+) -> tuple[MagicMock, MagicMock]:
+    """Build ``ClientSession`` mock that serves ``responses`` to successive ``get`` calls."""
+    queue = list(responses)
+    n = 0
+
+    def get_side(*_a: Any, **_k: Any) -> Any:
+        nonlocal n
+        resp = queue[n] if n < len(queue) else queue[-1]
+        n += 1
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=resp)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return cm
+
+    session = MagicMock()
+    session.get = MagicMock(side_effect=get_side)
+
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=session)
+    client_cm.__aexit__ = AsyncMock(return_value=None)
+    return client_cm, session
+
+
+def test_enforce_web_fetch_egress_documents_connect_time_pinning():
+    assert enforce_web_fetch_egress.__doc__ and "resolved addresses" in (
+        enforce_web_fetch_egress.__doc__ or ""
     )
+    assert (
+        web_egress.get_validated_stream_addrinfos_for_egress.__doc__
+        and "pinning"
+        in (web_egress.get_validated_stream_addrinfos_for_egress.__doc__ or "")
+    )
+    assert "DNS-pinned" in (_run_web_fetch.__doc__ or "")
 
 
 @pytest.mark.asyncio
 async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
-    req1 = httpx.Request("GET", "http://8.8.8.8/start")
-    res_redirect = httpx.Response(302, headers={"Location": "/final"}, request=req1)
-    req2 = httpx.Request("GET", "http://8.8.8.8/final")
-    res_ok = httpx.Response(200, content=b"hello world", request=req2)
-
-    mock_client = MagicMock()
-    mock_client.stream = MagicMock(
-        side_effect=[_stream_cm(res_redirect), _stream_cm(res_ok)]
+    res_redirect = _aiohttp_response(
+        302, url="http://8.8.8.8/start", location="/final", body=b""
     )
-
-    with patch(
-        "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
-    ):
+    res_ok = _aiohttp_response(200, url="http://8.8.8.8/final", body=b"hello world")
+    client_cm, session = _aiohttp_client_session_patch(res_redirect, res_ok)
+    with patch("api.web_tools.outbound.ClientSession", return_value=client_cm):
         out = await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
 
     assert out["data"] == "hello world"
-    assert mock_client.stream.call_count == 2
+    assert session.get.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
-    req = httpx.Request("GET", "http://8.8.8.8/big")
     huge = b"x" * 5000
-    res_ok = httpx.Response(200, content=huge, request=req)
-
-    mock_client = MagicMock()
-    mock_client.stream = MagicMock(return_value=_stream_cm(res_ok))
-
+    res_ok = _aiohttp_response(200, url="http://8.8.8.8/big", body=huge)
+    client_cm, _ = _aiohttp_client_session_patch(res_ok)
     monkeypatch.setattr(web_tool_constants, "_MAX_WEB_FETCH_RESPONSE_BYTES", 100)
-    with patch(
-        "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
-    ):
+    with patch("api.web_tools.outbound.ClientSession", return_value=client_cm):
         out = await _run_web_fetch("http://8.8.8.8/big", _STRICT_EGRESS)
 
     assert len(out["data"]) <= 100
@@ -199,37 +243,28 @@ async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_web_fetch_redirect_to_blocked_host_raises():
-    req1 = httpx.Request("GET", "http://8.8.8.8/start")
-    res_redirect = httpx.Response(
-        302, headers={"Location": "http://127.0.0.1/secret"}, request=req1
+    res_redirect = _aiohttp_response(
+        302,
+        url="http://8.8.8.8/start",
+        location="http://127.0.0.1/secret",
+        body=b"",
     )
-
-    mock_client = MagicMock()
-    mock_client.stream = MagicMock(return_value=_stream_cm(res_redirect))
-
+    client_cm, session = _aiohttp_client_session_patch(res_redirect)
     with (
-        patch(
-            "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
-        ),
+        patch("api.web_tools.outbound.ClientSession", return_value=client_cm),
         pytest.raises(WebFetchEgressViolation),
     ):
         await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
 
-    mock_client.stream.assert_called_once()
+    session.get.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_run_web_fetch_redirect_without_location_raises():
-    req1 = httpx.Request("GET", "http://8.8.8.8/here")
-    res_bad = httpx.Response(302, headers={}, request=req1)
-
-    mock_client = MagicMock()
-    mock_client.stream = MagicMock(return_value=_stream_cm(res_bad))
-
+    res_bad = _aiohttp_response(302, url="http://8.8.8.8/here", body=b"")
+    client_cm, _ = _aiohttp_client_session_patch(res_bad)
     with (
-        patch(
-            "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
-        ),
+        patch("api.web_tools.outbound.ClientSession", return_value=client_cm),
         pytest.raises(WebFetchEgressViolation, match="missing Location"),
     ):
         await _run_web_fetch("http://8.8.8.8/here", _STRICT_EGRESS)
@@ -237,19 +272,12 @@ async def test_run_web_fetch_redirect_without_location_raises():
 
 @pytest.mark.asyncio
 async def test_run_web_fetch_excess_redirects_raises():
-    req1 = httpx.Request("GET", "http://8.8.8.8/a")
-    res1 = httpx.Response(302, headers={"Location": "/b"}, request=req1)
-    req2 = httpx.Request("GET", "http://8.8.8.8/b")
-    res2 = httpx.Response(302, headers={"Location": "/c"}, request=req2)
-
-    mock_client = MagicMock()
-    mock_client.stream = MagicMock(side_effect=[_stream_cm(res1), _stream_cm(res2)])
-
+    res1 = _aiohttp_response(302, url="http://8.8.8.8/a", location="/b", body=b"")
+    res2 = _aiohttp_response(302, url="http://8.8.8.8/b", location="/c", body=b"")
+    client_cm, _ = _aiohttp_client_session_patch(res1, res2)
     with (
         patch("api.web_tools.constants._MAX_WEB_FETCH_REDIRECTS", 1),
-        patch(
-            "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
-        ),
+        patch("api.web_tools.outbound.ClientSession", return_value=client_cm),
         pytest.raises(WebFetchEgressViolation, match="exceeded maximum redirects"),
     ):
         await _run_web_fetch("http://8.8.8.8/a", _STRICT_EGRESS)

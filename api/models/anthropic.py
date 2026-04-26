@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 # =============================================================================
@@ -15,41 +15,47 @@ class Role(StrEnum):
     system = "system"
 
 
-class ContentBlockText(BaseModel):
+class _AnthropicBlockBase(BaseModel):
+    """Pass through provider fields (e.g. ``cache_control``) for native transports."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ContentBlockText(_AnthropicBlockBase):
     type: Literal["text"]
     text: str
 
 
-class ContentBlockImage(BaseModel):
+class ContentBlockImage(_AnthropicBlockBase):
     type: Literal["image"]
     source: dict[str, Any]
 
 
-class ContentBlockToolUse(BaseModel):
+class ContentBlockToolUse(_AnthropicBlockBase):
     type: Literal["tool_use"]
     id: str
     name: str
     input: dict[str, Any]
 
 
-class ContentBlockToolResult(BaseModel):
+class ContentBlockToolResult(_AnthropicBlockBase):
     type: Literal["tool_result"]
     tool_use_id: str
     content: str | list[Any] | dict[str, Any]
 
 
-class ContentBlockThinking(BaseModel):
+class ContentBlockThinking(_AnthropicBlockBase):
     type: Literal["thinking"]
     thinking: str
     signature: str | None = None
 
 
-class ContentBlockRedactedThinking(BaseModel):
+class ContentBlockRedactedThinking(_AnthropicBlockBase):
     type: Literal["redacted_thinking"]
     data: str
 
 
-class SystemContent(BaseModel):
+class SystemContent(_AnthropicBlockBase):
     type: Literal["text"]
     text: str
 
@@ -73,7 +79,7 @@ class Message(BaseModel):
     reasoning_content: str | None = None
 
 
-class Tool(BaseModel):
+class Tool(_AnthropicBlockBase):
     name: str
     # Anthropic server tools (e.g. web_search beta tools) include a ``type`` and
     # may omit ``input_schema`` because the provider owns the schema.

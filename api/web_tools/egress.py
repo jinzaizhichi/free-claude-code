@@ -20,15 +20,31 @@ class WebFetchEgressViolation(ValueError):
     """Raised when a web_fetch URL is rejected by egress policy (SSRF guard)."""
 
 
-def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
-    """Validate ``url`` before performing web_fetch; raise on policy violations.
+def _port_for_url(parsed) -> int:
+    if parsed.port is not None:
+        return parsed.port
+    return 443 if (parsed.scheme or "").lower() == "https" else 80
 
-    .. note::
-        Hostnames are resolved to IP addresses at validation time. A malicious or
-        flaky DNS server could in theory change answers before the HTTP client
-        connects (time-of-check/time-of-use). Fully closing that gap requires
-        transport-level pinning or connect-time re-validation; this tool accepts
-        that residual risk (see tests).
+
+def _stream_getaddrinfo_or_raise(host: str, port: int) -> list[tuple]:
+    try:
+        return socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+        )
+    except OSError as exc:
+        raise WebFetchEgressViolation(
+            f"Could not resolve host {host!r}: {exc}"
+        ) from exc
+
+
+def get_validated_stream_addrinfos_for_egress(
+    url: str, policy: WebFetchEgressPolicy
+) -> list[tuple]:
+    """Resolve and validate a URL for web_fetch, returning getaddrinfo rows for pinning.
+
+    Each HTTP connect pins to only these `getaddrinfo` results so a malicious DNS
+    server cannot rebind to a disallowed address between resolution and the TCP
+    connect (used by :func:`api.web_tools.outbound._run_web_fetch`).
     """
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
@@ -41,8 +57,10 @@ def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
     if host is None or host == "":
         raise WebFetchEgressViolation("web_fetch URL must include a host")
 
+    port = _port_for_url(parsed)
+
     if policy.allow_private_network_targets:
-        return
+        return _stream_getaddrinfo_or_raise(host, port)
 
     host_lower = host.lower()
     if host_lower == "localhost" or host_lower.endswith(".localhost"):
@@ -60,15 +78,9 @@ def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
             raise WebFetchEgressViolation(
                 f"Non-public IP host {host!r} is not allowed for web_fetch"
             )
-        return
+        return _stream_getaddrinfo_or_raise(host, port)
 
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise WebFetchEgressViolation(
-            f"Could not resolve host {host!r}: {exc}"
-        ) from exc
-
+    infos = _stream_getaddrinfo_or_raise(host, port)
     for *_, sockaddr in infos:
         addr = sockaddr[0]
         try:
@@ -79,3 +91,9 @@ def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
             raise WebFetchEgressViolation(
                 f"Host {host!r} resolves to a non-public address ({resolved})"
             )
+    return infos
+
+
+def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
+    """Validate ``url`` (scheme, host, and resolved addresses) for web_fetch."""
+    get_validated_stream_addrinfos_for_egress(url, policy)

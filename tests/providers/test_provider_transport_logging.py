@@ -183,7 +183,7 @@ async def test_native_stream_failure_logs_exclude_exception_str_by_default(
             new_callable=AsyncMock,
             return_value=response,
         ),
-        patch.object(AnthropicMessagesTransport, "_iter_sse_lines", boom),
+        patch.object(AnthropicMessagesTransport, "_iter_sse_events", boom),
         caplog.at_level(logging.ERROR),
     ):
         _ = [e async for e in provider.stream_response(req)]
