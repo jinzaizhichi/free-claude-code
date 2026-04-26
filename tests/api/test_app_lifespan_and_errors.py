@@ -24,6 +24,8 @@ _RUNTIME_EXTRAS = {
     "debug_subagent_stack": False,
     "log_api_error_tracebacks": False,
     "log_raw_messaging_content": False,
+    "log_raw_cli_diagnostics": False,
+    "log_messaging_error_details": False,
 }
 
 

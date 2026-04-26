@@ -23,6 +23,7 @@ from .models import IncomingMessage
 from .node_event_pipeline import handle_session_info_event, process_parsed_cli_event
 from .platforms.base import MessagingPlatform, SessionManagerInterface
 from .rendering.profiles import build_rendering_profile
+from .safe_diagnostics import format_exception_for_log
 from .session import SessionStore
 from .transcript import RenderCtx, TranscriptBuffer
 from .trees.queue_manager import (
@@ -54,6 +55,8 @@ class ClaudeMessageHandler:
         debug_platform_edits: bool = False,
         debug_subagent_stack: bool = False,
         log_raw_messaging_content: bool = False,
+        log_raw_cli_diagnostics: bool = False,
+        log_messaging_error_details: bool = False,
     ):
         self.platform = platform
         self.cli_manager = cli_manager
@@ -61,6 +64,8 @@ class ClaudeMessageHandler:
         self._debug_platform_edits = debug_platform_edits
         self._debug_subagent_stack = debug_subagent_stack
         self._log_raw_messaging_content = log_raw_messaging_content
+        self._log_raw_cli_diagnostics = log_raw_cli_diagnostics
+        self._log_messaging_error_details = log_messaging_error_details
         self._tree_queue = TreeQueueManager(
             queue_update_callback=self.update_queue_positions,
             node_started_callback=self.mark_node_processing,
@@ -139,7 +144,12 @@ class ClaudeMessageHandler:
                     kind=message_kind_for_command(cmd_base),
                 )
         except Exception as e:
-            logger.debug(f"Failed to record incoming message_id: {e}")
+            logger.debug(
+                "Failed to record incoming message_id: {}",
+                format_exception_for_log(
+                    e, log_full_message=self._log_messaging_error_details
+                ),
+            )
 
         if await dispatch_command(self, incoming, cmd_base):
             return
@@ -246,7 +256,12 @@ class ClaudeMessageHandler:
         try:
             queued_ids = await tree.get_queue_snapshot()
         except Exception as e:
-            logger.warning(f"Failed to read queue snapshot: {e}")
+            logger.warning(
+                "Failed to read queue snapshot: {}",
+                format_exception_for_log(
+                    e, log_full_message=self._log_messaging_error_details
+                ),
+            )
             return
 
         if not queued_ids:
@@ -343,6 +358,7 @@ class ClaudeMessageHandler:
             chat_id=chat_id,
             status_msg_id=status_msg_id,
             debug_platform_edits=self._debug_platform_edits,
+            log_messaging_error_details=self._log_messaging_error_details,
         )
 
         async def update_ui(status: str | None = None, force: bool = False) -> None:
@@ -405,7 +421,9 @@ class ClaudeMessageHandler:
                 if event_data.get("type") == "session_info":
                     continue
 
-                parsed_list = parse_cli_event(event_data)
+                parsed_list = parse_cli_event(
+                    event_data, log_raw_cli=self._log_raw_cli_diagnostics
+                )
                 logger.debug(f"HANDLER: Parsed {len(parsed_list)} events from CLI")
 
                 for parsed in parsed_list:
@@ -424,6 +442,7 @@ class ClaudeMessageHandler:
                         session_store=self.session_store,
                         format_status=self.format_status,
                         propagate_error_to_children=self._propagate_error_to_children,
+                        log_messaging_error_details=self._log_messaging_error_details,
                     )
 
         except asyncio.CancelledError:
@@ -446,7 +465,10 @@ class ClaudeMessageHandler:
                 )
         except Exception as e:
             logger.error(
-                f"HANDLER: Task failed with exception: {type(e).__name__}: {e}"
+                "HANDLER: Task failed with exception: {}",
+                format_exception_for_log(
+                    e, log_full_message=self._log_messaging_error_details
+                ),
             )
             error_msg = format_user_error_preview(e)
             transcript.apply({"type": "error", "message": error_msg})
@@ -466,7 +488,13 @@ class ClaudeMessageHandler:
                 elif temp_session_id:
                     await self.cli_manager.remove_session(temp_session_id)
             except Exception as e:
-                logger.debug(f"Failed to remove session for node {node_id}: {e}")
+                logger.debug(
+                    "Failed to remove session for node {}: {}",
+                    node_id,
+                    format_exception_for_log(
+                        e, log_full_message=self._log_messaging_error_details
+                    ),
+                )
 
     async def _propagate_error_to_children(
         self,
@@ -562,7 +590,12 @@ class ClaudeMessageHandler:
                 platform, chat_id, str(msg_id), direction="out", kind=kind
             )
         except Exception as e:
-            logger.debug(f"Failed to record message_id: {e}")
+            logger.debug(
+                "Failed to record message_id: {}",
+                format_exception_for_log(
+                    e, log_full_message=self._log_messaging_error_details
+                ),
+            )
 
     def update_cancelled_nodes_ui(self, nodes: list[MessageNode]) -> None:
         """Update status messages and persist tree state for cancelled nodes."""

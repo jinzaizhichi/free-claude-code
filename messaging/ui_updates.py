@@ -8,6 +8,7 @@ from collections.abc import Callable
 from loguru import logger
 
 from .platforms.base import MessagingPlatform
+from .safe_diagnostics import format_exception_for_log
 from .transcript import RenderCtx, TranscriptBuffer
 
 
@@ -26,6 +27,7 @@ class ThrottledTranscriptEditor:
         chat_id: str,
         status_msg_id: str,
         debug_platform_edits: bool,
+        log_messaging_error_details: bool = False,
     ) -> None:
         self._platform = platform
         self._parse_mode = parse_mode
@@ -36,6 +38,7 @@ class ThrottledTranscriptEditor:
         self._chat_id = chat_id
         self._status_msg_id = status_msg_id
         self._debug_platform_edits = debug_platform_edits
+        self._log_messaging_error_details = log_messaging_error_details
         self._last_ui_update = 0.0
         self._last_displayed_text: str | None = None
         self._last_status: str | None = None
@@ -60,7 +63,13 @@ class ThrottledTranscriptEditor:
                 status=status,
             )
         except Exception as e:
-            logger.warning(f"Transcript render failed for node {self._node_id}: {e}")
+            logger.warning(
+                "Transcript render failed for node {}: {}",
+                self._node_id,
+                format_exception_for_log(
+                    e, log_full_message=self._log_messaging_error_details
+                ),
+            )
             return
         if display and display != self._last_displayed_text:
             logger.debug(
@@ -74,12 +83,6 @@ class ThrottledTranscriptEditor:
             )
             if self._debug_platform_edits:
                 logger.debug("PLATFORM_EDIT_TEXT:\n{}", display)
-            else:
-                head = display[:500]
-                tail = display[-500:] if len(display) > 500 else ""
-                logger.debug("PLATFORM_EDIT_PREVIEW_HEAD:\n{}", head)
-                if tail:
-                    logger.debug("PLATFORM_EDIT_PREVIEW_TAIL:\n{}", tail)
             self._last_displayed_text = display
             try:
                 await self._platform.queue_edit_message(
@@ -90,5 +93,9 @@ class ThrottledTranscriptEditor:
                 )
             except Exception as e:
                 logger.warning(
-                    f"Failed to update platform for node {self._node_id}: {e}"
+                    "Failed to update platform for node {}: {}",
+                    self._node_id,
+                    format_exception_for_log(
+                        e, log_full_message=self._log_messaging_error_details
+                    ),
                 )

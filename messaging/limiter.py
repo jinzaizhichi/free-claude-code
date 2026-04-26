@@ -12,7 +12,10 @@ from typing import Any
 
 from loguru import logger
 
+from config.settings import get_settings
 from core.rate_limit import StrictSlidingWindowLimiter as SlidingWindowLimiter
+
+from .safe_diagnostics import format_exception_for_log
 
 
 class MessagingRateLimiter:
@@ -143,15 +146,27 @@ class MessagingRateLimiter:
                                 asyncio.get_event_loop().time() + wait_secs
                             )
                         else:
+                            d = get_settings().log_messaging_error_details
                             logger.error(
-                                f"Error in limiter worker for key {dedup_key}: {type(e).__name__}: {e}"
+                                "Error in limiter worker for key {}: {}",
+                                dedup_key,
+                                format_exception_for_log(e, log_full_message=d),
                             )
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(
-                    f"MessagingRateLimiter worker critical error: {e}", exc_info=True
-                )
+                d = get_settings().log_messaging_error_details
+                if d:
+                    logger.error(
+                        "MessagingRateLimiter worker critical error: {}",
+                        e,
+                        exc_info=True,
+                    )
+                else:
+                    logger.error(
+                        "MessagingRateLimiter worker critical error: exc_type={}",
+                        type(e).__name__,
+                    )
                 await asyncio.sleep(1)
 
     async def shutdown(self, timeout: float = 2.0) -> None:
@@ -177,7 +192,11 @@ class MessagingRateLimiter:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.debug(f"MessagingRateLimiter worker shutdown error: {e}")
+            d = get_settings().log_messaging_error_details
+            logger.debug(
+                "MessagingRateLimiter worker shutdown error: {}",
+                format_exception_for_log(e, log_full_message=d),
+            )
         finally:
             self._worker_task = None
 
@@ -250,14 +269,29 @@ class MessagingRateLimiter:
                         x in error_msg for x in ["connect", "timeout", "broken"]
                     ):
                         wait = 2**attempt
-                        logger.warning(
-                            f"Limiter fire_and_forget transient error (attempt {attempt + 1}): {e}. Retrying in {wait}s..."
-                        )
+                        d = get_settings().log_messaging_error_details
+                        if d:
+                            logger.warning(
+                                "Limiter fire_and_forget transient error (attempt {}): {}. Retrying in {}s...",
+                                attempt + 1,
+                                e,
+                                wait,
+                            )
+                        else:
+                            logger.warning(
+                                "Limiter fire_and_forget transient error (attempt {}): exc_type={}. Retrying in {}s...",
+                                attempt + 1,
+                                type(e).__name__,
+                                wait,
+                            )
                         await asyncio.sleep(wait)
                         continue
 
+                    d = get_settings().log_messaging_error_details
                     logger.error(
-                        f"Final error in fire_and_forget for key {dedup_key}: {type(e).__name__}: {e}"
+                        "Final error in fire_and_forget for key {}: {}",
+                        dedup_key,
+                        format_exception_for_log(e, log_full_message=d),
                     )
                     if not future.done():
                         future.set_exception(e)

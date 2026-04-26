@@ -14,6 +14,9 @@ from config.constants import (
 )
 from core.anthropic import iter_provider_stream_error_sse_events
 from core.anthropic.emitted_sse_tracker import EmittedNativeSseTracker
+from core.anthropic.native_messages_request import (
+    build_base_native_anthropic_request_body,
+)
 from providers.base import BaseProvider, ProviderConfig
 from providers.error_mapping import (
     map_error,
@@ -70,23 +73,11 @@ class AnthropicMessagesTransport(BaseProvider):
     ) -> dict:
         """Build a native Anthropic request body."""
         thinking_enabled = self._is_thinking_enabled(request, thinking_enabled)
-        body = request.model_dump(exclude_none=True)
-
-        body.pop("extra_body", None)
-
-        if "thinking" in body:
-            thinking_cfg = body.pop("thinking")
-            if thinking_enabled and isinstance(thinking_cfg, dict):
-                thinking_payload = {"type": "enabled"}
-                budget_tokens = thinking_cfg.get("budget_tokens")
-                if isinstance(budget_tokens, int):
-                    thinking_payload["budget_tokens"] = budget_tokens
-                body["thinking"] = thinking_payload
-
-        if "max_tokens" not in body:
-            body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-
-        return body
+        return build_base_native_anthropic_request_body(
+            request,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+            thinking_enabled=thinking_enabled,
+        )
 
     async def _send_stream_request(self, body: dict) -> httpx.Response:
         """Create a streaming messages response."""

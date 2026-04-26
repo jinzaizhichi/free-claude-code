@@ -9,6 +9,7 @@ from loguru import logger
 
 from .cli_event_constants import TRANSCRIPT_EVENT_TYPES, get_status_for_event
 from .platforms.base import SessionManagerInterface
+from .safe_diagnostics import text_len_hint
 from .session import SessionStore
 from .transcript import TranscriptBuffer
 from .trees.queue_manager import MessageState, MessageTree
@@ -57,6 +58,7 @@ async def process_parsed_cli_event(
     session_store: SessionStore,
     format_status: Callable[..., str],
     propagate_error_to_children: Callable[[str, str, str], Awaitable[None]],
+    log_messaging_error_details: bool = False,
 ) -> tuple[str | None, bool]:
     """Process a single parsed CLI event. Returns (last_status, had_transcript_events)."""
     ptype = parsed.get("type") or ""
@@ -85,7 +87,14 @@ async def process_parsed_cli_event(
             session_store.save_tree(tree.root_id, tree.to_dict())
     elif ptype == "error":
         error_msg = parsed.get("message", "Unknown error")
-        logger.error(f"HANDLER: Error event received: {error_msg}")
+        if log_messaging_error_details:
+            logger.error("HANDLER: Error event received: {}", error_msg)
+        else:
+            em = error_msg if isinstance(error_msg, str) else str(error_msg)
+            logger.error(
+                "HANDLER: Error event received: message_chars={}",
+                text_len_hint(em),
+            )
         logger.info("HANDLER: Updating UI with error status")
         await update_ui(format_status("❌", "Error"), force=True)
         if tree:

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -347,6 +348,33 @@ class TestCLISession:
         assert "warning on stderr" in err_events[0]["error"]["message"]
         assert events[-1]["type"] == "exit"
         assert events[-1]["code"] == 0
+
+    @pytest.mark.asyncio
+    async def test_drain_stderr_bounded_retains_cap_but_drains_to_eof(self):
+        """Oversized stderr is fully drained so the pipe cannot deadlock; capture is bounded."""
+        from cli.session import _MAX_STDERR_CAPTURE_BYTES, CLISession
+
+        total_len = _MAX_STDERR_CAPTURE_BYTES + 100_000
+        remaining: dict[str, int] = {"n": total_len}
+
+        class _FakeStderr:
+            async def read(self, n: int = 65536) -> bytes:
+                left = remaining["n"]
+                if left <= 0:
+                    return b""
+                take = min(n, left)
+                remaining["n"] = left - take
+                return b"y" * take
+
+        class _FakeProcess:
+            stderr = _FakeStderr()
+
+        out = await CLISession._drain_stderr_bounded(
+            cast(asyncio.subprocess.Process, _FakeProcess())
+        )
+        assert len(out) == _MAX_STDERR_CAPTURE_BYTES
+        assert out == b"y" * _MAX_STDERR_CAPTURE_BYTES
+        assert remaining["n"] == 0
 
     @pytest.mark.asyncio
     async def test_stop_session(self):

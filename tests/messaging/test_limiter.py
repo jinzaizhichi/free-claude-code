@@ -253,4 +253,6 @@ class TestMessagingRateLimiter:
         limiter.fire_and_forget(fail_task, dedup_key="fire_fail")
         await asyncio.sleep(1.5)
 
-        assert any("fire_and_forget failed" in str(r) for r in caplog.records)
+        joined = " ".join(str(r.message) for r in caplog.records)
+        assert "ValueError" in joined
+        assert "fire_and_forget failed" not in joined

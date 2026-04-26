@@ -36,6 +36,8 @@ class CLISession:
         allowed_dirs: list[str] | None = None,
         plans_directory: str | None = None,
         claude_bin: str = "claude",
+        *,
+        log_raw_cli_diagnostics: bool = False,
     ):
         self.config = ClaudeCliConfig(
             workspace_path=os.path.normpath(os.path.abspath(workspace_path)),
@@ -49,6 +51,7 @@ class CLISession:
         self.allowed_dirs = self.config.allowed_dirs
         self.plans_directory = self.config.plans_directory
         self.claude_bin = self.config.claude_bin
+        self._log_raw_cli_diagnostics = log_raw_cli_diagnostics
         self.process: asyncio.subprocess.Process | None = None
         self.current_session_id: str | None = None
         self._is_busy = False
@@ -60,7 +63,12 @@ class CLISession:
         *,
         max_bytes: int = _MAX_STDERR_CAPTURE_BYTES,
     ) -> bytes:
-        """Read stderr concurrently with stdout to avoid subprocess pipe deadlocks."""
+        """Read stderr concurrently with stdout to avoid subprocess pipe deadlocks.
+
+        Retains at most ``max_bytes`` for logging; any excess is discarded, but
+        the pipe is read until EOF so a noisy child cannot fill the buffer and
+        block forever.
+        """
         if not process.stderr:
             return b""
         parts: list[bytes] = []
@@ -69,14 +77,12 @@ class CLISession:
             chunk = await process.stderr.read(65_536)
             if not chunk:
                 break
-            remaining = max_bytes - received
-            if remaining <= 0:
-                break
-            if len(chunk) > remaining:
-                parts.append(chunk[:remaining])
-                break
-            parts.append(chunk)
-            received += len(chunk)
+            if received < max_bytes:
+                take = min(len(chunk), max_bytes - received)
+                if take:
+                    parts.append(chunk[:take])
+                    received += take
+            # If already at cap, keep reading and discarding until EOF.
         return b"".join(parts)
 
     @property
@@ -223,7 +229,14 @@ class CLISession:
                 if stderr_bytes:
                     stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
                     if stderr_text:
-                        logger.error(f"Claude CLI Stderr: {stderr_text}")
+                        if self._log_raw_cli_diagnostics:
+                            logger.error("Claude CLI stderr: {}", stderr_text)
+                        else:
+                            logger.error(
+                                "Claude CLI stderr: bytes={} text_chars={}",
+                                len(stderr_bytes),
+                                len(stderr_text),
+                            )
                         logger.info("CLI_SESSION: Yielding error event from stderr")
                         yield {"type": "error", "error": {"message": stderr_text}}
 
@@ -260,7 +273,10 @@ class CLISession:
 
             yield event
         except json.JSONDecodeError:
-            logger.debug(f"Non-JSON output: {line_str}")
+            if self._log_raw_cli_diagnostics:
+                logger.debug("Non-JSON output: {}", line_str)
+            else:
+                logger.debug("Non-JSON CLI line: char_len={}", len(line_str))
             yield {"type": "raw", "content": line_str}
 
     def _extract_session_id(self, event: Any) -> str | None:
@@ -303,6 +319,16 @@ class CLISession:
                     unregister_pid(self.process.pid)
                 return True
             except Exception as e:
-                logger.error(f"Error stopping process: {e}")
+                if self._log_raw_cli_diagnostics:
+                    logger.error(
+                        "Error stopping process: {}: {}",
+                        type(e).__name__,
+                        e,
+                    )
+                else:
+                    logger.error(
+                        "Error stopping process: exc_type={}",
+                        type(e).__name__,
+                    )
                 return False
         return False

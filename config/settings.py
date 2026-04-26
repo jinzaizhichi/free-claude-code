@@ -223,6 +223,14 @@ class Settings(BaseSettings):
     log_raw_messaging_content: bool = Field(
         default=False, validation_alias="LOG_RAW_MESSAGING_CONTENT"
     )
+    # When true, log full Claude CLI stderr, non-JSON lines, and parser error text.
+    log_raw_cli_diagnostics: bool = Field(
+        default=False, validation_alias="LOG_RAW_CLI_DIAGNOSTICS"
+    )
+    # When true, log exception text / CLI error strings in messaging (may leak user content).
+    log_messaging_error_details: bool = Field(
+        default=False, validation_alias="LOG_MESSAGING_ERROR_DETAILS"
+    )
     debug_platform_edits: bool = Field(
         default=False, validation_alias="DEBUG_PLATFORM_EDITS"
     )

@@ -200,6 +200,8 @@ class AppRuntime:
             allowed_dirs=allowed_dirs,
             plans_directory=plans_directory,
             claude_bin=self.settings.claude_cli_bin,
+            log_raw_cli_diagnostics=self.settings.log_raw_cli_diagnostics,
+            log_messaging_error_details=self.settings.log_messaging_error_details,
         )
 
         session_store = SessionStore(
@@ -215,6 +217,8 @@ class AppRuntime:
             debug_platform_edits=self.settings.debug_platform_edits,
             debug_subagent_stack=self.settings.debug_subagent_stack,
             log_raw_messaging_content=self.settings.log_raw_messaging_content,
+            log_raw_cli_diagnostics=self.settings.log_raw_cli_diagnostics,
+            log_messaging_error_details=self.settings.log_messaging_error_details,
         )
         self._restore_tree_state(session_store)
 

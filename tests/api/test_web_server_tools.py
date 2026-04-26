@@ -7,6 +7,7 @@ import pytest
 from starlette.responses import StreamingResponse
 
 import api.web_server_tools
+import api.web_tools.constants as web_tool_constants
 from api.models.anthropic import Message, MessagesRequest, Tool
 from api.services import ClaudeProxyService
 from api.web_server_tools import (
@@ -166,7 +167,9 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
         side_effect=[_stream_cm(res_redirect), _stream_cm(res_ok)]
     )
 
-    with patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)):
+    with patch(
+        "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
+    ):
         out = await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
 
     assert out["data"] == "hello world"
@@ -182,8 +185,10 @@ async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
     mock_client = MagicMock()
     mock_client.stream = MagicMock(return_value=_stream_cm(res_ok))
 
-    monkeypatch.setattr(api.web_server_tools, "_MAX_WEB_FETCH_RESPONSE_BYTES", 100)
-    with patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)):
+    monkeypatch.setattr(web_tool_constants, "_MAX_WEB_FETCH_RESPONSE_BYTES", 100)
+    with patch(
+        "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
+    ):
         out = await _run_web_fetch("http://8.8.8.8/big", _STRICT_EGRESS)
 
     assert len(out["data"]) <= 100
@@ -201,7 +206,9 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
     mock_client.stream = MagicMock(return_value=_stream_cm(res_redirect))
 
     with (
-        patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
+        patch(
+            "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
+        ),
         pytest.raises(WebFetchEgressViolation),
     ):
         await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
@@ -218,7 +225,9 @@ async def test_run_web_fetch_redirect_without_location_raises():
     mock_client.stream = MagicMock(return_value=_stream_cm(res_bad))
 
     with (
-        patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
+        patch(
+            "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
+        ),
         pytest.raises(WebFetchEgressViolation, match="missing Location"),
     ):
         await _run_web_fetch("http://8.8.8.8/here", _STRICT_EGRESS)
@@ -235,8 +244,10 @@ async def test_run_web_fetch_excess_redirects_raises():
     mock_client.stream = MagicMock(side_effect=[_stream_cm(res1), _stream_cm(res2)])
 
     with (
-        patch("api.web_server_tools._MAX_WEB_FETCH_REDIRECTS", 1),
-        patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
+        patch("api.web_tools.constants._MAX_WEB_FETCH_REDIRECTS", 1),
+        patch(
+            "api.web_tools.outbound.httpx.AsyncClient", return_value=_cm(mock_client)
+        ),
         pytest.raises(WebFetchEgressViolation, match="exceeded maximum redirects"),
     ):
         await _run_web_fetch("http://8.8.8.8/a", _STRICT_EGRESS)
@@ -248,7 +259,7 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
         assert query == "DeepSeek V4 model release 2026"
         return [{"title": "DeepSeek V4 Released", "url": "https://example.com/v4"}]
 
-    monkeypatch.setattr("api.web_server_tools._run_web_search", fake_search)
+    monkeypatch.setattr("api.web_tools.outbound._run_web_search", fake_search)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -296,7 +307,7 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
             "data": "Article body",
         }
 
-    monkeypatch.setattr("api.web_server_tools._run_web_fetch", fake_fetch)
+    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -334,7 +345,7 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
     async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
         raise ValueError(secret)
 
-    monkeypatch.setattr("api.web_server_tools._run_web_fetch", boom)
+    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -348,7 +359,7 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
         tool_choice={"type": "tool", "name": "web_fetch"},
     )
 
-    with patch("api.web_server_tools.logger.warning") as log_warn:
+    with patch("api.web_tools.outbound.logger.warning") as log_warn:
         raw = "".join(
             [
                 event
@@ -377,7 +388,7 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
         raise OSError(5, "oops")
 
-    monkeypatch.setattr("api.web_server_tools._run_web_fetch", boom)
+    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
