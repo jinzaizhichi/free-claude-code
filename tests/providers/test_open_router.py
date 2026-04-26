@@ -30,8 +30,6 @@ class MockRequest:
         self.tool_choice = None
         self.metadata = None
         self.extra_body = {}
-        self.original_model = "claude-3-sonnet"
-        self.resolved_provider_model = "open_router/stepfun/step-3.5-flash:free"
         self.thinking = MagicMock()
         self.thinking.enabled = True
         for k, v in kwargs.items():
@@ -135,8 +133,6 @@ def test_build_request_body_is_native_anthropic(open_router_provider):
     assert body["system"] == "System prompt"
     assert body["reasoning"] == {"enabled": True}
     assert "extra_body" not in body
-    assert "original_model" not in body
-    assert "resolved_provider_model" not in body
 
 
 def test_build_request_body_omits_reasoning_when_globally_disabled(

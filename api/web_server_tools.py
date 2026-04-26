@@ -112,17 +112,29 @@ def _request_text(request: MessagesRequest) -> str:
     return "\n".join(_content_text(message.content) for message in request.messages)
 
 
-def _web_tool_name(request: MessagesRequest) -> str | None:
-    for tool in request.tools or []:
-        name = tool.name
-        tool_type = tool.type or ""
-        if name in {"web_search", "web_fetch"} or tool_type.startswith("web_"):
-            return name
+def _forced_web_server_tool_name(request: MessagesRequest) -> str | None:
+    """Return web_search or web_fetch only when tool_choice forces that server tool."""
+    tc = request.tool_choice
+    if not isinstance(tc, dict):
+        return None
+    if tc.get("type") != "tool":
+        return None
+    name = tc.get("name")
+    if name in {"web_search", "web_fetch"}:
+        return str(name)
     return None
 
 
+def _has_tool_named(request: MessagesRequest, name: str) -> bool:
+    return any(tool.name == name for tool in request.tools or [])
+
+
 def is_web_server_tool_request(request: MessagesRequest) -> bool:
-    return _web_tool_name(request) in {"web_search", "web_fetch"}
+    """True when the client forces a web server tool via tool_choice (not merely listed)."""
+    forced = _forced_web_server_tool_name(request)
+    if forced is None:
+        return False
+    return _has_tool_named(request, forced)
 
 
 def _extract_query(text: str) -> str:
@@ -191,8 +203,8 @@ def _search_summary(query: str, results: list[dict[str, str]]) -> str:
 async def stream_web_server_tool_response(
     request: MessagesRequest, input_tokens: int
 ) -> AsyncIterator[str]:
-    tool_name = _web_tool_name(request)
-    if tool_name is None:
+    tool_name = _forced_web_server_tool_name(request)
+    if tool_name is None or not _has_tool_named(request, tool_name):
         return
 
     text = _request_text(request)

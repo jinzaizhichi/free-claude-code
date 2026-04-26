@@ -19,6 +19,13 @@ import httpx
 import pytest
 
 from config.provider_ids import SUPPORTED_PROVIDER_IDS
+from core.anthropic.stream_contracts import (
+    SSEEvent,
+    assert_anthropic_stream_contract,
+    has_tool_use,
+    parse_sse_lines,
+    text_content,
+)
 from messaging.handler import ClaudeMessageHandler
 from messaging.models import IncomingMessage
 from messaging.platforms.base import MessagingPlatform
@@ -26,13 +33,6 @@ from messaging.session import SessionStore
 from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
 from smoke.lib.server import RunningServer, start_server
 from smoke.lib.skips import fail_missing_env
-from smoke.lib.sse import (
-    SSEEvent,
-    assert_anthropic_stream_contract,
-    has_tool_use,
-    parse_sse_lines,
-    text_content,
-)
 
 
 @dataclass(slots=True)

@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from config.nim import NimSettings
 from providers.base import ProviderConfig
 from providers.nvidia_nim import NvidiaNimProvider
+from providers.nvidia_nim.options import NimRequestOptions
 
 
 class AsyncStreamMock:
@@ -36,7 +36,7 @@ def _make_provider():
         rate_limit=10,
         rate_window=60,
     )
-    return NvidiaNimProvider(config, nim_settings=NimSettings())
+    return NvidiaNimProvider(config, nim_settings=NimRequestOptions())
 
 
 def _make_provider_with_thinking_enabled(enabled: bool):
@@ -48,7 +48,7 @@ def _make_provider_with_thinking_enabled(enabled: bool):
         rate_window=60,
         enable_thinking=enabled,
     )
-    return NvidiaNimProvider(config, nim_settings=NimSettings())
+    return NvidiaNimProvider(config, nim_settings=NimRequestOptions())
 
 
 def _make_request(model="test-model", stream=True):

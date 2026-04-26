@@ -68,14 +68,16 @@ class TelegramPlatform(MessagingPlatform):
         whisper_device: str = "cpu",
         hf_token: str = "",
         nvidia_nim_api_key: str = "",
+        messaging_rate_limit: int = 1,
+        messaging_rate_window: float = 1.0,
     ):
         if not TELEGRAM_AVAILABLE:
             raise ImportError(
                 "python-telegram-bot is required. Install with: pip install python-telegram-bot"
             )
 
-        self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN")
-        self.allowed_user_id = allowed_user_id or os.getenv("ALLOWED_TELEGRAM_USER_ID")
+        self.bot_token = bot_token
+        self.allowed_user_id = allowed_user_id
 
         if not self.bot_token:
             # We don't raise here to allow instantiation for testing/conditional logic,
@@ -97,6 +99,8 @@ class TelegramPlatform(MessagingPlatform):
         self._voice_note_enabled = voice_note_enabled
         self._whisper_model = whisper_model
         self._whisper_device = whisper_device
+        self._messaging_rate_limit = messaging_rate_limit
+        self._messaging_rate_window = messaging_rate_window
 
     async def _register_pending_voice(
         self, chat_id: str, voice_msg_id: str, status_msg_id: str
@@ -172,7 +176,10 @@ class TelegramPlatform(MessagingPlatform):
         # Initialize rate limiter
         from ..limiter import MessagingRateLimiter
 
-        self._limiter = await MessagingRateLimiter.get_instance()
+        self._limiter = await MessagingRateLimiter.get_instance(
+            rate_limit=self._messaging_rate_limit,
+            rate_window=self._messaging_rate_window,
+        )
 
         # Send startup notification
         try:

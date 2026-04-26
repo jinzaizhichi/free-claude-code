@@ -71,14 +71,34 @@ def test_config_does_not_import_non_config_packages() -> None:
     assert offenders == []
 
 
-def test_messaging_does_not_import_api_or_cli_or_providers() -> None:
-    """Messaging is wired by ``api.runtime``; must not import server or provider adapters."""
+_MESSAGING_ALLOWED_PROVIDER_MODULES = frozenset({"providers.nvidia_nim.voice"})
+
+
+def test_messaging_does_not_import_disallowed_modules() -> None:
+    """Messaging is wired by ``api.runtime``; narrow provider imports only for NIM voice ASR."""
     repo_root = Path(__file__).resolve().parents[2]
-    offenders = _imports_matching(
-        [repo_root / "messaging"],
-        forbidden_prefixes=("api.", "cli.", "providers.", "smoke."),
-    )
-    assert offenders == []
+    offenders: list[str] = []
+    for path in (repo_root / "messaging").rglob("*.py"):
+        for imported in _imports_from(path, repo_root):
+            if imported is None:
+                continue
+            if (
+                imported == "api"
+                or imported.startswith("api.")
+                or imported == "cli"
+                or imported.startswith("cli.")
+                or imported == "smoke"
+                or imported.startswith("smoke.")
+            ):
+                rel = path.relative_to(repo_root)
+                offenders.append(f"{rel}: {imported}")
+            elif imported.startswith("providers."):
+                if imported in _MESSAGING_ALLOWED_PROVIDER_MODULES:
+                    continue
+                rel = path.relative_to(repo_root)
+                offenders.append(f"{rel}: {imported}")
+
+    assert sorted(offenders) == []
 
 
 def test_api_may_only_import_narrow_provider_facade() -> None:

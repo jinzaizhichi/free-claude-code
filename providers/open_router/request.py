@@ -25,15 +25,11 @@ _REQUEST_FIELDS = (
     "tool_choice",
     "thinking",
     "extra_body",
-    "original_model",
-    "resolved_provider_model",
 )
 
 _INTERNAL_FIELDS = {
     "thinking",
     "extra_body",
-    "original_model",
-    "resolved_provider_model",
 }
 _THINKING_HISTORY_BLOCK_TYPES = {"thinking", "redacted_thinking"}
 

@@ -3,9 +3,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from api.app import app
+from api.app import create_app
 from api.dependencies import get_settings
 from config.settings import Settings
+
+app = create_app()
 
 
 @pytest.fixture

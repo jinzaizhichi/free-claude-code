@@ -11,7 +11,7 @@ from typing import Any
 from core.anthropic import SSEBuilder, append_request_id
 from providers.anthropic_messages import AnthropicMessagesTransport, StreamChunkMode
 from providers.base import ProviderConfig
-from providers.defaults import OPENROUTER_BASE_URL
+from providers.defaults import OPENROUTER_DEFAULT_BASE
 
 from .request import build_request_body
 
@@ -39,7 +39,7 @@ class OpenRouterProvider(AnthropicMessagesTransport):
         super().__init__(
             config,
             provider_name="OPENROUTER",
-            default_base_url=OPENROUTER_BASE_URL,
+            default_base_url=OPENROUTER_DEFAULT_BASE,
         )
 
     def _build_request_body(

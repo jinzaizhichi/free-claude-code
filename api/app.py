@@ -1,6 +1,5 @@
 """FastAPI application factory and configuration."""
 
-import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -17,13 +16,6 @@ from providers.exceptions import ProviderError
 from .routes import router
 from .runtime import AppRuntime
 
-# Opt-in to future behavior for python-telegram-bot
-os.environ["PTB_TIMEDELTA"] = "1"
-
-# Configure logging first (before any module logs)
-_settings = get_settings()
-configure_logging(_settings.log_file)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,6 +30,9 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    settings = get_settings()
+    configure_logging(settings.log_file)
+
     app = FastAPI(
         title="Claude Code Proxy",
         version="2.0.0",
@@ -130,7 +125,3 @@ def create_app() -> FastAPI:
         )
 
     return app
-
-
-# Default app instance for uvicorn
-app = create_app()

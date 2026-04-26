@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     messaging_platform: str = Field(
         default="discord", validation_alias="MESSAGING_PLATFORM"
     )
+    messaging_rate_limit: int = Field(
+        default=1, validation_alias="MESSAGING_RATE_LIMIT"
+    )
+    messaging_rate_window: float = Field(
+        default=1.0, validation_alias="MESSAGING_RATE_WINDOW"
+    )
 
     # ==================== NVIDIA NIM Config ====================
     nvidia_nim_api_key: str = ""
@@ -215,6 +221,9 @@ class Settings(BaseSettings):
     claude_workspace: str = "./agent_workspace"
     allowed_dir: str = ""
     claude_cli_bin: str = Field(default="claude", validation_alias="CLAUDE_CLI_BIN")
+    max_message_log_entries_per_chat: int | None = Field(
+        default=None, validation_alias="MAX_MESSAGE_LOG_ENTRIES_PER_CHAT"
+    )
 
     # ==================== Server ====================
     host: str = "0.0.0.0"
@@ -254,6 +263,13 @@ class Settings(BaseSettings):
             return None
         return v
 
+    @field_validator("max_message_log_entries_per_chat", mode="before")
+    @classmethod
+    def parse_optional_log_cap(cls, v: Any) -> Any:
+        if v == "" or v is None:
+            return None
+        return v
+
     @field_validator("whisper_device")
     @classmethod
     def validate_whisper_device(cls, v: str) -> str:
@@ -271,6 +287,20 @@ class Settings(BaseSettings):
                 f"messaging_platform must be 'telegram', 'discord', or 'none', got {v!r}"
             )
         return v
+
+    @field_validator("messaging_rate_limit")
+    @classmethod
+    def validate_messaging_rate_limit(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("messaging_rate_limit must be > 0")
+        return v
+
+    @field_validator("messaging_rate_window")
+    @classmethod
+    def validate_messaging_rate_window(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("messaging_rate_window must be > 0")
+        return float(v)
 
     @field_validator("ollama_base_url")
     @classmethod

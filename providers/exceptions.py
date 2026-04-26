@@ -90,7 +90,7 @@ class APIError(ProviderError):
         )
 
 
-class UnknownProviderTypeError(ValueError):
+class UnknownProviderTypeError(InvalidRequestError):
     """Raised when ``provider_id`` is not registered in the provider map."""
 
     def __init__(self, message: str) -> None:

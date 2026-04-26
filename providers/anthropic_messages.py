@@ -67,8 +67,6 @@ class AnthropicMessagesTransport(BaseProvider):
         body = request.model_dump(exclude_none=True)
 
         body.pop("extra_body", None)
-        body.pop("original_model", None)
-        body.pop("resolved_provider_model", None)
 
         if "thinking" in body:
             thinking_cfg = body.pop("thinking")

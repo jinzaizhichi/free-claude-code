@@ -1,7 +1,6 @@
 """Neutral SSE parsing and Anthropic stream shape assertions.
 
-Used by default CI contract tests and re-exported from ``smoke.lib.sse`` for
-opt-in smoke scenarios.
+Used by default CI contract tests and by opt-in live smoke scenarios.
 """
 
 from __future__ import annotations

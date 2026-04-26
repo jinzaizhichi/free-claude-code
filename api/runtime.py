@@ -110,6 +110,8 @@ class AppRuntime:
                     whisper_device=self.settings.whisper_device,
                     hf_token=self.settings.hf_token,
                     nvidia_nim_api_key=self.settings.nvidia_nim_api_key,
+                    messaging_rate_limit=self.settings.messaging_rate_limit,
+                    messaging_rate_window=self.settings.messaging_rate_window,
                 ),
             )
 
@@ -154,7 +156,8 @@ class AppRuntime:
         )
 
         session_store = SessionStore(
-            storage_path=os.path.join(data_path, "sessions.json")
+            storage_path=os.path.join(data_path, "sessions.json"),
+            message_log_cap=self.settings.max_message_log_entries_per_chat,
         )
         platform = self.messaging_platform
         assert platform is not None

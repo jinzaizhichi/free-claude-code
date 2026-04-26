@@ -6,7 +6,6 @@ Implements MessagingPlatform for Discord using discord.py.
 
 import asyncio
 import contextlib
-import os
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -97,15 +96,16 @@ class DiscordPlatform(MessagingPlatform):
         whisper_device: str = "cpu",
         hf_token: str = "",
         nvidia_nim_api_key: str = "",
+        messaging_rate_limit: int = 1,
+        messaging_rate_window: float = 1.0,
     ):
         if not DISCORD_AVAILABLE:
             raise ImportError(
                 "discord.py is required. Install with: pip install discord.py"
             )
 
-        self.bot_token = bot_token or os.getenv("DISCORD_BOT_TOKEN")
-        raw_channels = allowed_channel_ids or os.getenv("ALLOWED_DISCORD_CHANNELS")
-        self.allowed_channel_ids = _parse_allowed_channels(raw_channels)
+        self.bot_token = bot_token
+        self.allowed_channel_ids = _parse_allowed_channels(allowed_channel_ids)
 
         if not self.bot_token:
             logger.warning("DISCORD_BOT_TOKEN not set")
@@ -130,6 +130,8 @@ class DiscordPlatform(MessagingPlatform):
         self._voice_note_enabled = voice_note_enabled
         self._whisper_model = whisper_model
         self._whisper_device = whisper_device
+        self._messaging_rate_limit = messaging_rate_limit
+        self._messaging_rate_window = messaging_rate_window
 
     async def _handle_client_message(self, message: Any) -> None:
         """Adapter entry point used by the internal discord client."""
@@ -336,7 +338,10 @@ class DiscordPlatform(MessagingPlatform):
 
         from ..limiter import MessagingRateLimiter
 
-        self._limiter = await MessagingRateLimiter.get_instance()
+        self._limiter = await MessagingRateLimiter.get_instance(
+            rate_limit=self._messaging_rate_limit,
+            rate_window=self._messaging_rate_window,
+        )
 
         self._start_task = asyncio.create_task(
             self._client.start(self.bot_token),

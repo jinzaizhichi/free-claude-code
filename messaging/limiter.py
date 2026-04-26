@@ -6,7 +6,6 @@ using a strict sliding window algorithm and a task queue.
 """
 
 import asyncio
-import os
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -82,22 +81,28 @@ class MessagingRateLimiter:
         return super().__new__(cls)
 
     @classmethod
-    async def get_instance(cls) -> MessagingRateLimiter:
-        """Get the singleton instance of the limiter."""
+    async def get_instance(
+        cls,
+        *,
+        rate_limit: int = 1,
+        rate_window: float = 1.0,
+    ) -> MessagingRateLimiter:
+        """Get the singleton instance of the limiter.
+
+        ``rate_limit`` and ``rate_window`` apply only when the singleton is first
+        created. Call :meth:`shutdown_instance` before changing parameters.
+        """
         async with cls._lock:
             if cls._instance is None:
-                cls._instance = cls()
+                cls._instance = cls(rate_limit=rate_limit, rate_window=rate_window)
                 # Start the background worker (tracked for graceful shutdown).
                 cls._instance._start_worker()
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, *, rate_limit: int, rate_window: float) -> None:
         # Prevent double initialization in singleton
         if hasattr(self, "_initialized"):
             return
-
-        rate_limit = int(os.getenv("MESSAGING_RATE_LIMIT", "1"))
-        rate_window = float(os.getenv("MESSAGING_RATE_WINDOW", "2.0"))
 
         self.limiter = SlidingWindowLimiter(rate_limit, rate_window)
         # Custom queue state - using deque for O(1) popleft

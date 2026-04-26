@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from config.nim import NimSettings
 from core.anthropic import set_if_not_none
+from providers.nvidia_nim.options import NimRequestOptions
 from providers.nvidia_nim.request import (
     _set_extra,
     build_request_body,
@@ -67,21 +67,21 @@ class TestSetExtra:
 class TestBuildRequestBody:
     def test_max_tokens_capped_by_nim(self, req):
         req.max_tokens = 100000
-        nim = NimSettings(max_tokens=4096)
+        nim = NimRequestOptions(max_tokens=4096)
         body = build_request_body(req, nim, thinking_enabled=True)
         assert body["max_tokens"] == 4096
 
     def test_presence_penalty_included_when_nonzero(self, req):
-        nim = NimSettings(presence_penalty=0.5)
+        nim = NimRequestOptions(presence_penalty=0.5)
         body = build_request_body(req, nim, thinking_enabled=True)
         assert body["presence_penalty"] == 0.5
 
     def test_include_stop_str_in_output_not_sent(self, req):
-        body = build_request_body(req, NimSettings(), thinking_enabled=True)
+        body = build_request_body(req, NimRequestOptions(), thinking_enabled=True)
         assert "include_stop_str_in_output" not in body.get("extra_body", {})
 
     def test_parallel_tool_calls_included(self, req):
-        nim = NimSettings(parallel_tool_calls=False)
+        nim = NimRequestOptions(parallel_tool_calls=False)
         body = build_request_body(req, nim, thinking_enabled=True)
         assert body["parallel_tool_calls"] is False
 
@@ -99,7 +99,7 @@ class TestBuildRequestBody:
         req.extra_body = None
         req.top_k = None
 
-        nim = NimSettings()
+        nim = NimRequestOptions()
         body = build_request_body(req, nim, thinking_enabled=True)
         extra = body["extra_body"]
         assert extra["chat_template_kwargs"] == {
@@ -149,7 +149,7 @@ class TestBuildRequestBody:
         req.extra_body = None
         req.top_k = None
 
-        nim = NimSettings()
+        nim = NimRequestOptions()
         body = build_request_body(req, nim, thinking_enabled=False)
         extra = body.get("extra_body", {})
         assert "chat_template_kwargs" not in extra
@@ -171,7 +171,7 @@ class TestBuildRequestBody:
             "chat_template_kwargs": {"enable_thinking": False, "custom": "value"}
         }
 
-        body = build_request_body(req, NimSettings(), thinking_enabled=True)
+        body = build_request_body(req, NimRequestOptions(), thinking_enabled=True)
         assert body["extra_body"]["chat_template_kwargs"] == {
             "enable_thinking": False,
             "custom": "value",
@@ -192,7 +192,7 @@ class TestBuildRequestBody:
         req.extra_body = None
         req.top_k = None
 
-        nim = NimSettings(chat_template="custom_template")
+        nim = NimRequestOptions(chat_template="custom_template")
         body = build_request_body(req, nim, thinking_enabled=True)
         extra = body.get("extra_body", {})
         assert extra["chat_template_kwargs"] == {
@@ -216,7 +216,7 @@ class TestBuildRequestBody:
         req.extra_body = None
         req.top_k = None
 
-        nim = NimSettings()
+        nim = NimRequestOptions()
         body = build_request_body(req, nim, thinking_enabled=False)
         extra = body.get("extra_body", {})
         for param in (
@@ -250,6 +250,6 @@ class TestBuildRequestBody:
         req.extra_body = None
         req.top_k = None
 
-        body = build_request_body(req, NimSettings(), thinking_enabled=False)
+        body = build_request_body(req, NimRequestOptions(), thinking_enabled=False)
         assert "<think>" not in body["messages"][0]["content"]
         assert "answer" in body["messages"][0]["content"]

@@ -32,8 +32,6 @@ class MockRequest:
             "model": self.model,
             "messages": [{"role": "user", "content": "Hello"}],
             "extra_body": {"ignored": True},
-            "original_model": "claude",
-            "resolved_provider_model": "native/test-model",
             "thinking": {"enabled": thinking_enabled},
         }
 
@@ -124,8 +122,6 @@ def test_default_request_body_strips_internal_fields(provider_config):
     assert body["thinking"] == {"type": "enabled"}
     assert body["max_tokens"] == 81920
     assert "extra_body" not in body
-    assert "original_model" not in body
-    assert "resolved_provider_model" not in body
 
 
 def test_default_request_body_preserves_thinking_budget(provider_config):

@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from providers.base import ProviderConfig
-from providers.ollama import OLLAMA_BASE_URL, OllamaProvider
+from providers.ollama import OLLAMA_DEFAULT_BASE, OllamaProvider
 
 
 class MockMessage:
@@ -92,7 +92,7 @@ def test_init_uses_default_base_url():
     config = ProviderConfig(api_key="ollama", base_url=None)
     with patch("httpx.AsyncClient"):
         provider = OllamaProvider(config)
-        assert provider._base_url == OLLAMA_BASE_URL
+        assert provider._base_url == OLLAMA_DEFAULT_BASE
 
 
 def test_init_uses_configurable_timeouts():

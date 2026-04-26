@@ -109,8 +109,12 @@ PROVIDER_DESCRIPTORS: dict[str, ProviderDescriptor] = {
 
 def _create_nvidia_nim(config: ProviderConfig, settings: Settings) -> BaseProvider:
     from providers.nvidia_nim import NvidiaNimProvider
+    from providers.nvidia_nim.options import NimRequestOptions
 
-    return NvidiaNimProvider(config, nim_settings=settings.nim)
+    return NvidiaNimProvider(
+        config,
+        nim_settings=NimRequestOptions.model_validate(settings.nim.model_dump()),
+    )
 
 
 def _create_open_router(config: ProviderConfig, _settings: Settings) -> BaseProvider:

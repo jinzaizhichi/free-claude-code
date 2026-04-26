@@ -5,8 +5,13 @@ from typing import Any
 
 from loguru import logger
 
-from config.nim import NimSettings
 from core.anthropic import build_base_request_body, set_if_not_none
+
+from .options import NimRequestOptions
+
+
+def _clone_request_body(body: dict[str, Any]) -> dict[str, Any]:
+    return deepcopy(body)
 
 
 def _set_extra(
@@ -23,7 +28,7 @@ def _set_extra(
 
 def clone_body_without_reasoning_budget(body: dict[str, Any]) -> dict[str, Any] | None:
     """Clone a request body and strip only reasoning_budget fields."""
-    cloned_body = deepcopy(body)
+    cloned_body = _clone_request_body(body)
     extra_body = cloned_body.get("extra_body")
     if not isinstance(extra_body, dict):
         return None
@@ -48,7 +53,7 @@ def clone_body_without_reasoning_budget(body: dict[str, Any]) -> dict[str, Any] 
 
 def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | None:
     """Clone a request body and strip only chat_template."""
-    cloned_body = deepcopy(body)
+    cloned_body = _clone_request_body(body)
     extra_body = cloned_body.get("extra_body")
     if not isinstance(extra_body, dict):
         return None
@@ -63,7 +68,7 @@ def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | N
 
 
 def build_request_body(
-    request_data: Any, nim: NimSettings, *, thinking_enabled: bool
+    request_data: Any, nim: NimRequestOptions, *, thinking_enabled: bool
 ) -> dict:
     """Build OpenAI-format request body from Anthropic request."""
     logger.debug(

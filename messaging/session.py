@@ -22,7 +22,12 @@ class SessionStore:
     Platform-agnostic: works with any messaging platform.
     """
 
-    def __init__(self, storage_path: str = "sessions.json"):
+    def __init__(
+        self,
+        storage_path: str = "sessions.json",
+        *,
+        message_log_cap: int | None = None,
+    ):
         self.storage_path = storage_path
         self._lock = threading.Lock()
         self._trees: dict[str, dict] = {}  # root_id -> tree data
@@ -34,11 +39,7 @@ class SessionStore:
         self._dirty = False
         self._save_timer: threading.Timer | None = None
         self._save_debounce_secs = 0.5
-        cap_raw = os.getenv("MAX_MESSAGE_LOG_ENTRIES_PER_CHAT", "").strip()
-        try:
-            self._message_log_cap: int | None = int(cap_raw) if cap_raw else None
-        except ValueError:
-            self._message_log_cap = None
+        self._message_log_cap: int | None = message_log_cap
         self._load()
 
     def _make_chat_key(self, platform: str, chat_id: str) -> str:

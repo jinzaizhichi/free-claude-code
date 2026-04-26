@@ -17,6 +17,9 @@ _RUNTIME_EXTRAS = {
     "nvidia_nim_api_key": "",
     "claude_cli_bin": "claude",
     "uses_process_anthropic_auth_token": lambda: False,
+    "messaging_rate_limit": 1,
+    "messaging_rate_window": 1.0,
+    "max_message_log_entries_per_chat": None,
 }
 
 

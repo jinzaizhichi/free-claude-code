@@ -3,8 +3,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from api.app import app
+from api.app import create_app
 from providers.nvidia_nim import NvidiaNimProvider
+
+app = create_app()
 
 # Mock provider
 mock_provider = MagicMock(spec=NvidiaNimProvider)

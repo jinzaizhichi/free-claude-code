@@ -57,10 +57,10 @@ class TestSettings:
         assert len(settings.model) > 0
 
     def test_base_url_constant(self):
-        """Test NVIDIA_NIM_BASE_URL is a constant."""
-        from providers.nvidia_nim import NVIDIA_NIM_BASE_URL
+        """Test NVIDIA_NIM_DEFAULT_BASE is a constant."""
+        from providers.nvidia_nim import NVIDIA_NIM_DEFAULT_BASE
 
-        assert NVIDIA_NIM_BASE_URL == "https://integrate.api.nvidia.com/v1"
+        assert NVIDIA_NIM_DEFAULT_BASE == "https://integrate.api.nvidia.com/v1"
 
     def test_lm_studio_base_url_from_env(self, monkeypatch):
         """LM_STUDIO_BASE_URL env var is loaded into settings."""

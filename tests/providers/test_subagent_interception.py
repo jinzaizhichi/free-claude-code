@@ -3,17 +3,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from config.nim import NimSettings
 from core.anthropic import ContentBlockManager
 from providers.base import ProviderConfig
 from providers.nvidia_nim import NvidiaNimProvider
+from providers.nvidia_nim.options import NimRequestOptions
 
 
 @pytest.mark.asyncio
 async def test_task_tool_interception():
     # Setup provider
     config = ProviderConfig(api_key="test")
-    provider = NvidiaNimProvider(config, nim_settings=NimSettings())
+    provider = NvidiaNimProvider(config, nim_settings=NimRequestOptions())
 
     # Mock request and sse builder with real ContentBlockManager
     request = MagicMock()

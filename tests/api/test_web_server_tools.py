@@ -14,7 +14,8 @@ def _event_data(event: str) -> dict:
     return json.loads(data_line.removeprefix("data: "))
 
 
-def test_detects_web_search_server_tool_request():
+def test_web_server_tool_not_detected_when_tool_only_listed():
+    """Listing web_search without forcing it must not skip the upstream provider."""
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -22,7 +23,31 @@ def test_detects_web_search_server_tool_request():
         tools=[Tool(name="web_search", type="web_search_20250305")],
     )
 
+    assert not is_web_server_tool_request(request)
+
+
+def test_web_server_tool_detected_when_tool_choice_forces_it():
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[Message(role="user", content="search")],
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
     assert is_web_server_tool_request(request)
+
+
+def test_web_server_tool_not_detected_when_forced_name_missing_from_tools():
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[Message(role="user", content="hi")],
+        tools=[Tool(name="other", type="function")],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    assert not is_web_server_tool_request(request)
 
 
 @pytest.mark.asyncio
