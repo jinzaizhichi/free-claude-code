@@ -250,22 +250,30 @@ def _safe_public_host_for_logs(url: str) -> str:
 
 async def _drain_response_body_capped(response: httpx.Response, max_bytes: int) -> None:
     received = 0
-    async for chunk in response.aiter_bytes():
-        received += len(chunk)
+    async for chunk in response.aiter_bytes(chunk_size=65_536):
+        if received >= max_bytes:
+            break
+        remaining = max_bytes - received
+        take = chunk if len(chunk) <= remaining else chunk[:remaining]
+        received += len(take)
         if received >= max_bytes:
             break
 
 
 async def _read_response_body_capped(response: httpx.Response, max_bytes: int) -> bytes:
-    chunks: list[bytes] = []
+    """Read at most ``max_bytes`` without retaining more than one chunk over the cap."""
+    parts: list[bytes] = []
     total = 0
-    async for chunk in response.aiter_bytes():
-        chunks.append(chunk)
-        total += len(chunk)
+    async for chunk in response.aiter_bytes(chunk_size=65_536):
         if total >= max_bytes:
             break
-    body = b"".join(chunks)
-    return body[:max_bytes]
+        remaining = max_bytes - total
+        if len(chunk) > remaining:
+            parts.append(chunk[:remaining])
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return b"".join(parts)
 
 
 def _log_web_tool_failure(

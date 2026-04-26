@@ -398,3 +398,31 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
         ]
     )
     assert "OSError" in raw
+
+
+@pytest.mark.asyncio
+async def test_read_response_body_capped_truncates_single_oversized_chunk():
+    cap = 500
+
+    async def aiter_bytes(chunk_size=None):
+        yield b"z" * (cap * 20)
+
+    response = MagicMock()
+    response.aiter_bytes = aiter_bytes
+
+    out = await api.web_server_tools._read_response_body_capped(response, cap)
+    assert len(out) == cap
+    assert out == b"z" * cap
+
+
+@pytest.mark.asyncio
+async def test_drain_response_body_capped_counts_truncated_chunk():
+    cap = 300
+
+    async def aiter_bytes(chunk_size=None):
+        yield b"y" * (cap * 10)
+
+    response = MagicMock()
+    response.aiter_bytes = aiter_bytes
+
+    await api.web_server_tools._drain_response_body_capped(response, cap)

@@ -79,8 +79,9 @@ def _resolve_with_registry(
 def get_provider_for_type(provider_type: str) -> BaseProvider:
     """Get or create a provider in the process-level cache (no ``app``/Request).
 
-    For server requests, use :func:`resolve_provider` with the active
-    :attr:`request.app` so the app-scoped provider registry is used.
+    HTTP route handlers should call :func:`resolve_provider` with the active
+    :attr:`request.app` (via :class:`~api.runtime.AppRuntime`) instead of this
+    process-wide cache.
     """
     return resolve_provider(provider_type, app=None, settings=get_settings())
 

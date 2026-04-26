@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from loguru import logger
 
-from core.anthropic import get_user_facing_error_message
+from core.anthropic import format_user_error_preview
 
 from ..models import IncomingMessage
 from ..rendering.discord_markdown import format_status_discord
@@ -262,10 +262,10 @@ class DiscordPlatform(MessagingPlatform):
             await self._message_handler(incoming)
             return True
         except ValueError as e:
-            await message.reply(get_user_facing_error_message(e)[:200])
+            await message.reply(format_user_error_preview(e))
             return True
         except ImportError as e:
-            await message.reply(get_user_facing_error_message(e)[:200])
+            await message.reply(format_user_error_preview(e))
             return True
         except Exception as e:
             if self._log_api_error_tracebacks:
@@ -353,9 +353,7 @@ class DiscordPlatform(MessagingPlatform):
             with contextlib.suppress(Exception):
                 await self.send_message(
                     channel_id,
-                    format_status_discord(
-                        "Error:", get_user_facing_error_message(e)[:200]
-                    ),
+                    format_status_discord("Error:", format_user_error_preview(e)),
                     reply_to=message_id,
                 )
 

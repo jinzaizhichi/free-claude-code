@@ -7,6 +7,7 @@ import pytest
 
 from providers.base import ProviderConfig
 from providers.ollama import OLLAMA_DEFAULT_BASE, OllamaProvider
+from tests.stream_contract import assert_canonical_stream_error_envelope
 
 
 class MockMessage:
@@ -228,10 +229,10 @@ async def test_stream_error_status_code(ollama_provider):
             async for event in ollama_provider.stream_response(req, request_id="REQ")
         ]
 
-    assert len(events) == 1
-    assert events[0].startswith("event: error\ndata: {")
-    assert "Provider API request failed" in events[0]
-    assert "REQ" in events[0]
+    assert_canonical_stream_error_envelope(
+        events, user_message_substr="Provider API request failed"
+    )
+    assert "REQ" in "".join(events)
 
 
 @pytest.mark.asyncio

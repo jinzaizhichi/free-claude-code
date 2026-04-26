@@ -57,6 +57,11 @@ def get_user_facing_error_message(
     return "Provider request failed unexpectedly."
 
 
+def format_user_error_preview(exc: Exception, *, max_len: int = 200) -> str:
+    """Truncate a user-facing error string for short chat replies."""
+    return get_user_facing_error_message(exc)[:max_len]
+
+
 def append_request_id(message: str, request_id: str | None) -> str:
     """Append request_id suffix when available."""
     base = message.strip() or "Provider request failed unexpectedly."

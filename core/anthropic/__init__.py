@@ -2,7 +2,12 @@
 
 from .content import extract_text_from_content, get_block_attr, get_block_type
 from .conversion import AnthropicToOpenAIConverter, build_base_request_body
-from .errors import append_request_id, get_user_facing_error_message
+from .errors import (
+    append_request_id,
+    format_user_error_preview,
+    get_user_facing_error_message,
+)
+from .provider_stream_error import iter_provider_stream_error_sse_events
 from .sse import ContentBlockManager, SSEBuilder, format_sse_event, map_stop_reason
 from .thinking import ContentChunk, ContentType, ThinkTagParser
 from .tokens import get_token_count
@@ -21,10 +26,12 @@ __all__ = [
     "build_base_request_body",
     "extract_text_from_content",
     "format_sse_event",
+    "format_user_error_preview",
     "get_block_attr",
     "get_block_type",
     "get_token_count",
     "get_user_facing_error_message",
+    "iter_provider_stream_error_sse_events",
     "map_stop_reason",
     "set_if_not_none",
 ]

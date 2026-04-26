@@ -8,7 +8,9 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel
 
-OPENROUTER_DEFAULT_MAX_TOKENS = 81920
+from config.constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS as OPENROUTER_DEFAULT_MAX_TOKENS,
+)
 
 _REQUEST_FIELDS = (
     "model",

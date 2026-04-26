@@ -209,6 +209,7 @@ def build_provider_config(
         enable_thinking=settings.enable_model_thinking,
         proxy=proxy,
         log_raw_sse_events=settings.log_raw_sse_events,
+        log_api_error_tracebacks=settings.log_api_error_tracebacks,
     )
 
 

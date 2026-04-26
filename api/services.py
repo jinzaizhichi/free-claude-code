@@ -43,6 +43,11 @@ def anthropic_sse_streaming_response(
     )
 
 
+def _http_status_for_unexpected_service_exception(_exc: BaseException) -> int:
+    """HTTP status for uncaught non-provider failures (stable client contract)."""
+    return 500
+
+
 def _log_unexpected_service_exception(
     settings: Settings,
     exc: BaseException,
@@ -153,7 +158,7 @@ class ClaudeProxyService:
                 self._settings, e, context="CREATE_MESSAGE_ERROR"
             )
             raise HTTPException(
-                status_code=getattr(e, "status_code", 500),
+                status_code=_http_status_for_unexpected_service_exception(e),
                 detail=get_user_facing_error_message(e),
             ) from e
 
@@ -185,5 +190,6 @@ class ClaudeProxyService:
                     request_id=request_id,
                 )
                 raise HTTPException(
-                    status_code=500, detail=get_user_facing_error_message(e)
+                    status_code=_http_status_for_unexpected_service_exception(e),
+                    detail=get_user_facing_error_message(e),
                 ) from e

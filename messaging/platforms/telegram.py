@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from core.anthropic import get_user_facing_error_message
+from core.anthropic import format_user_error_preview
 
 if TYPE_CHECKING:
     from telegram import Update
@@ -568,7 +568,7 @@ class TelegramPlatform(MessagingPlatform):
             with contextlib.suppress(Exception):
                 await self.send_message(
                     chat_id,
-                    f"❌ *{escape_md_v2('Error:')}* {escape_md_v2(get_user_facing_error_message(e)[:200])}",
+                    f"❌ *{escape_md_v2('Error:')}* {escape_md_v2(format_user_error_preview(e))}",
                     reply_to=incoming.message_id,
                     message_thread_id=thread_id,
                     parse_mode="MarkdownV2",
@@ -682,9 +682,9 @@ class TelegramPlatform(MessagingPlatform):
 
             await self._message_handler(incoming)
         except ValueError as e:
-            await update.message.reply_text(get_user_facing_error_message(e)[:200])
+            await update.message.reply_text(format_user_error_preview(e))
         except ImportError as e:
-            await update.message.reply_text(get_user_facing_error_message(e)[:200])
+            await update.message.reply_text(format_user_error_preview(e))
         except Exception as e:
             if self._log_api_error_tracebacks:
                 logger.error("Voice transcription failed: {}", e)

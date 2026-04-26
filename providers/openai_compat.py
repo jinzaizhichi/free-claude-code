@@ -311,7 +311,7 @@ class OpenAIChatTransport(BaseProvider):
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as e:
-                logger.error("{}_ERROR:{} {}: {}", tag, req_tag, type(e).__name__, e)
+                self._log_stream_transport_error(tag, req_tag, e)
                 mapped_e = map_error(e, rate_limiter=self._global_rate_limiter)
                 error_occurred = True
                 if getattr(mapped_e, "status_code", None) == 405:

@@ -184,7 +184,6 @@ def test_build_request_body_default_max_tokens(open_router_provider):
     body = open_router_provider._build_request_body(req)
 
     assert body["max_tokens"] == OPENROUTER_DEFAULT_MAX_TOKENS
-    assert body["max_tokens"] == 81920
 
 
 def test_build_request_body_strips_unsigned_thinking_history(open_router_provider):

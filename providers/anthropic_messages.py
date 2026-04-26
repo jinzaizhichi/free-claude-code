@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Literal
 
 import httpx
 from loguru import logger
 
-from core.anthropic import get_user_facing_error_message
+from config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from core.anthropic import (
+    get_user_facing_error_message,
+    iter_provider_stream_error_sse_events,
+)
 from providers.base import BaseProvider, ProviderConfig
 from providers.error_mapping import map_error
 from providers.rate_limit import GlobalRateLimiter
 
-ANTHROPIC_DEFAULT_MAX_TOKENS = 81920
 StreamChunkMode = Literal["line", "event"]
 
 
@@ -78,7 +80,7 @@ class AnthropicMessagesTransport(BaseProvider):
                 body["thinking"] = thinking_payload
 
         if "max_tokens" not in body:
-            body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_TOKENS
+            body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
         return body
 
@@ -95,30 +97,42 @@ class AnthropicMessagesTransport(BaseProvider):
     async def _raise_for_status(
         self, response: httpx.Response, *, req_tag: str
     ) -> None:
-        """Raise for non-200 responses after logging the upstream body."""
+        """Raise for non-200 responses after logging safe metadata (or full body if opted in)."""
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as error:
-            response_text = await self._read_error_body(response)
-            if response_text:
-                logger.error(
-                    "{}_ERROR:{} HTTP {}: {}",
-                    self._provider_name,
-                    req_tag,
-                    response.status_code,
-                    response_text,
-                )
+            body_preview = await self._read_error_body_bytes(response)
+            if body_preview is not None:
+                if self._config.log_api_error_tracebacks:
+                    text = body_preview.decode("utf-8", errors="replace")
+                    logger.error(
+                        "{}_ERROR:{} HTTP {}: {}",
+                        self._provider_name,
+                        req_tag,
+                        response.status_code,
+                        text,
+                    )
+                else:
+                    logger.error(
+                        "{}_ERROR:{} HTTP {} body_bytes={}",
+                        self._provider_name,
+                        req_tag,
+                        response.status_code,
+                        len(body_preview),
+                    )
             raise error
 
-    async def _read_error_body(self, response: httpx.Response) -> str:
-        """Read a response body for diagnostics."""
+    async def _read_error_body_bytes(self, response: httpx.Response) -> bytes | None:
+        """Read raw error response bytes for logging (caller decides verbosity)."""
         aread = getattr(response, "aread", None)
         if aread is None:
-            return ""
+            return None
         body = await aread()
         if isinstance(body, bytes):
-            return body.decode("utf-8", errors="replace")
-        return str(body)
+            return body
+        if body:
+            return str(body).encode("utf-8", errors="replace")
+        return b""
 
     async def _iter_sse_lines(self, response: httpx.Response) -> AsyncIterator[str]:
         """Yield raw SSE line chunks preserving local provider behavior."""
@@ -183,12 +197,14 @@ class AnthropicMessagesTransport(BaseProvider):
         error_message: str,
         sent_any_event: bool,
     ) -> Iterator[str]:
-        """Emit a native Anthropic error event."""
-        error_event = {
-            "type": "error",
-            "error": {"type": "api_error", "message": error_message},
-        }
-        yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+        """Emit the same Anthropic message lifecycle used by OpenAI-compat providers."""
+        yield from iter_provider_stream_error_sse_events(
+            request=request,
+            input_tokens=input_tokens,
+            error_message=error_message,
+            sent_any_event=sent_any_event,
+            log_raw_sse_events=self._config.log_raw_sse_events,
+        )
 
     async def _iter_stream_chunks(
         self,
@@ -257,9 +273,8 @@ class AnthropicMessagesTransport(BaseProvider):
                     yield chunk
 
             except Exception as error:
-                logger.error(
-                    "{}_ERROR:{} {}: {}", tag, req_tag, type(error).__name__, error
-                )
+                if not isinstance(error, httpx.HTTPStatusError):
+                    self._log_stream_transport_error(tag, req_tag, error)
                 error_message = self._get_error_message(error, request_id)
 
                 if response is not None and not response.is_closed:

@@ -11,7 +11,7 @@ import time
 
 from loguru import logger
 
-from core.anthropic import get_user_facing_error_message
+from core.anthropic import format_user_error_preview, get_user_facing_error_message
 
 from .command_dispatcher import (
     dispatch_command,
@@ -596,7 +596,7 @@ class ClaudeMessageHandler:
             logger.error(
                 f"HANDLER: Task failed with exception: {type(e).__name__}: {e}"
             )
-            error_msg = get_user_facing_error_message(e)[:200]
+            error_msg = format_user_error_preview(e)
             transcript.apply({"type": "error", "message": error_msg})
             await update_ui(self.format_status("💥", "Task Failed"), force=True)
             if tree:

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.anthropic import SSEBuilder, append_request_id
+from core.anthropic import append_request_id, iter_provider_stream_error_sse_events
 from providers.anthropic_messages import AnthropicMessagesTransport, StreamChunkMode
 from providers.base import ProviderConfig
 from providers.defaults import OPENROUTER_DEFAULT_BASE
@@ -260,14 +259,10 @@ class OpenRouterProvider(AnthropicMessagesTransport):
         sent_any_event: bool,
     ) -> Iterator[str]:
         """Emit the Anthropic SSE error shape expected by Claude clients."""
-        sse = SSEBuilder(
-            f"msg_{uuid.uuid4()}",
-            request.model,
-            input_tokens,
-            log_raw_events=self._config.log_raw_sse_events,
+        yield from iter_provider_stream_error_sse_events(
+            request=request,
+            input_tokens=input_tokens,
+            error_message=error_message,
+            sent_any_event=sent_any_event,
+            log_raw_sse_events=self._config.log_raw_sse_events,
         )
-        if not sent_any_event:
-            yield sse.message_start()
-        yield from sse.emit_error(error_message)
-        yield sse.message_delta("end_turn", 1)
-        yield sse.message_stop()

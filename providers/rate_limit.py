@@ -3,13 +3,14 @@
 import asyncio
 import random
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any, ClassVar, TypeVar
 
 import openai
 from loguru import logger
+
+from core.rate_limit import StrictSlidingWindowLimiter
 
 T = TypeVar("T")
 
@@ -51,10 +52,10 @@ class GlobalRateLimiter:
         self._rate_limit = rate_limit
         self._rate_window = float(rate_window)
         self._max_concurrency = max_concurrency
-        # Monotonic timestamps of the last granted slots.
-        self._request_times: deque[float] = deque()
+        self._proactive_limiter = StrictSlidingWindowLimiter(
+            self._rate_limit, self._rate_window
+        )
         self._blocked_until: float = 0
-        self._lock = asyncio.Lock()
         self._concurrency_sem = asyncio.Semaphore(max_concurrency)
         self._initialized = True
 
@@ -150,27 +151,7 @@ class GlobalRateLimiter:
         Guarantees: at most `self._rate_limit` acquisitions in any interval of length
         `self._rate_window` (seconds).
         """
-        while True:
-            wait_time = 0.0
-            async with self._lock:
-                now = time.monotonic()
-                cutoff = now - self._rate_window
-
-                while self._request_times and self._request_times[0] <= cutoff:
-                    self._request_times.popleft()
-
-                if len(self._request_times) < self._rate_limit:
-                    self._request_times.append(now)
-                    return
-
-                oldest = self._request_times[0]
-                wait_time = max(0.0, (oldest + self._rate_window) - now)
-
-            # Sleep outside the lock so other tasks can continue to queue.
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-            else:
-                await asyncio.sleep(0)
+        await self._proactive_limiter.acquire()
 
     def set_blocked(self, seconds: float = 60) -> None:
         """

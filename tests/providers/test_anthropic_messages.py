@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from providers.anthropic_messages import AnthropicMessagesTransport
 from providers.base import ProviderConfig
+from tests.stream_contract import assert_canonical_stream_error_envelope
 
 
 class NativeProvider(AnthropicMessagesTransport):
@@ -120,7 +122,7 @@ def test_default_request_body_strips_internal_fields(provider_config):
 
     assert body["model"] == "test-model"
     assert body["thinking"] == {"type": "enabled"}
-    assert body["max_tokens"] == 81920
+    assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
     assert "extra_body" not in body
 
 
@@ -206,7 +208,8 @@ async def test_stream_maps_non_200_to_error_event_and_closes_response(
         ]
 
     assert response.is_closed
-    assert len(events) == 1
-    assert events[0].startswith("event: error\ndata: {")
-    assert "Provider API request failed" in events[0]
-    assert "REQ_123" in events[0]
+    assert_canonical_stream_error_envelope(
+        events, user_message_substr="Provider API request failed"
+    )
+    blob = "".join(events)
+    assert "REQ_123" in blob

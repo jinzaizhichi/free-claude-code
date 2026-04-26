@@ -25,6 +25,7 @@ class ProviderConfig(BaseModel):
     enable_thinking: bool = True
     proxy: str = ""
     log_raw_sse_events: bool = False
+    log_api_error_tracebacks: bool = False
 
 
 class BaseProvider(ABC):
@@ -61,6 +62,29 @@ class BaseProvider(ABC):
             if enabled is not None:
                 request_enabled = bool(enabled)
         return config_enabled and request_enabled
+
+    def _log_stream_transport_error(
+        self, tag: str, req_tag: str, error: Exception
+    ) -> None:
+        """Log streaming transport failures (metadata-only unless verbose is enabled)."""
+        from loguru import logger
+
+        if self._config.log_api_error_tracebacks:
+            logger.error(
+                "{}_ERROR:{} {}: {}", tag, req_tag, type(error).__name__, error
+            )
+            return
+        response = getattr(error, "response", None)
+        status_code = (
+            getattr(response, "status_code", None) if response is not None else None
+        )
+        logger.error(
+            "{}_ERROR:{} exc_type={} http_status={}",
+            tag,
+            req_tag,
+            type(error).__name__,
+            status_code,
+        )
 
     @abstractmethod
     async def cleanup(self) -> None:

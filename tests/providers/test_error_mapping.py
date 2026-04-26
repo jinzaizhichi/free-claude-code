@@ -6,7 +6,11 @@ import openai
 import pytest
 from httpx import ReadTimeout, Request, Response
 
-from core.anthropic import append_request_id, get_user_facing_error_message
+from core.anthropic import (
+    append_request_id,
+    format_user_error_preview,
+    get_user_facing_error_message,
+)
 from providers.error_mapping import map_error
 from providers.exceptions import (
     APIError,
@@ -142,3 +146,10 @@ def test_user_facing_message_bad_request_prefers_mapped_text_over_sdk_string():
         openai.BadRequestError, message="leaky-upstream-detail", status_code=400
     )
     assert get_user_facing_error_message(exc) == "Invalid request sent to provider."
+
+
+def test_format_user_error_preview_truncates():
+    exc = ValueError("x" * 500)
+    preview = format_user_error_preview(exc, max_len=20)
+    assert len(preview) == 20
+    assert preview == "x" * 20

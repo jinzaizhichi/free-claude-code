@@ -125,6 +125,32 @@ def test_create_message_unexpected_error_default_logs_exclude_exception_text():
     assert "RuntimeError" in blob
 
 
+def test_create_message_unexpected_error_always_returns_500():
+    """Non-provider failures must not leak arbitrary status_code attributes."""
+
+    class WeirdError(Exception):
+        status_code = 418
+
+    settings = Settings()
+    mock_provider = MagicMock()
+
+    def stream_boom(*_a, **_kw):
+        raise WeirdError("no")
+
+    mock_provider.stream_response = stream_boom
+    service = ClaudeProxyService(settings, provider_getter=lambda _: mock_provider)
+    request = MessagesRequest(
+        model="claude-3-haiku-20240307",
+        max_tokens=10,
+        messages=[Message(role="user", content="hi")],
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        service.create_message(request)
+
+    assert excinfo.value.status_code == 500
+
+
 def test_count_tokens_unexpected_error_default_logs_exclude_exception_text():
     settings = Settings()
     assert settings.log_api_error_tracebacks is False
