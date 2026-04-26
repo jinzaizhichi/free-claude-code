@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from core.anthropic import ContentType, HeuristicToolParser, SSEBuilder, ThinkTagParser
+from core.anthropic.sse import format_sse_event
 from core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     event_names,
@@ -54,6 +55,51 @@ def test_mixed_reasoning_content_and_think_tags_keep_order() -> None:
     assert_anthropic_stream_contract(events)
     assert thinking_content(events) == "reasoning fieldtagged"
     assert text_content(events) == " visible  done"
+
+
+def test_redacted_thinking_block_start_stop_is_valid() -> None:
+    """Native redacted_thinking uses start/stop only (no deltas)."""
+    chunks = [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_r",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "m",
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "redacted_thinking", "data": "opaque"},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    events = parse_sse_text("".join(chunks))
+    assert_anthropic_stream_contract(events)
 
 
 def test_enable_thinking_false_suppresses_reasoning_only() -> None:

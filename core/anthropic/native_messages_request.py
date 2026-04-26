@@ -31,7 +31,6 @@ _INTERNAL_FIELDS = {
     "thinking",
     "extra_body",
 }
-_THINKING_HISTORY_BLOCK_TYPES = {"thinking", "redacted_thinking"}
 
 
 def _serialize_value(value: Any) -> Any:
@@ -71,7 +70,11 @@ def _dump_request_fields(request_data: Any) -> dict[str, Any]:
 
 
 def _strip_unsigned_thinking_history(messages: Any) -> Any:
-    """Remove assistant thinking history blocks that OpenRouter cannot replay."""
+    """Remove assistant ``thinking`` blocks that lack a signature (cannot replay).
+
+    ``redacted_thinking`` blocks are preserved: they carry opaque provider data and
+    do not use ``signature`` the same way as native ``thinking`` blocks.
+    """
     if not isinstance(messages, list):
         return messages
 
@@ -91,7 +94,7 @@ def _strip_unsigned_thinking_history(messages: Any) -> Any:
             for block in content
             if not (
                 isinstance(block, dict)
-                and block.get("type") in _THINKING_HISTORY_BLOCK_TYPES
+                and block.get("type") == "thinking"
                 and not isinstance(block.get("signature"), str)
             )
         ]

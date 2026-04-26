@@ -152,6 +152,39 @@ def test_build_request_body_preserves_reasoning_content(deepseek_provider):
     assert body["messages"][0]["reasoning_content"] == "First think"
 
 
+def test_build_request_body_disabled_thinking_omits_reasoning_and_thinking_tags():
+    """Resolved thinking policy must strip assistant thinking from OpenAI history."""
+    provider = DeepSeekProvider(
+        ProviderConfig(
+            api_key="test_deepseek_key",
+            base_url=DEEPSEEK_DEFAULT_BASE,
+            rate_limit=10,
+            rate_window=60,
+            enable_thinking=False,
+        )
+    )
+    req = MockRequest(
+        system=None,
+        model="deepseek-chat",
+        messages=[
+            MockMessage(
+                "assistant",
+                [
+                    MockBlock(type="thinking", thinking="secret"),
+                    MockBlock(type="text", text="hi"),
+                ],
+            )
+        ],
+    )
+
+    body = provider._build_request_body(req)
+
+    assistant = body["messages"][0]
+    assert "reasoning_content" not in assistant
+    assert "secret" not in assistant["content"]
+    assert assistant["content"] == "hi"
+
+
 @pytest.mark.asyncio
 async def test_stream_response_reasoning_content(deepseek_provider):
     """reasoning_content deltas are emitted as thinking blocks."""

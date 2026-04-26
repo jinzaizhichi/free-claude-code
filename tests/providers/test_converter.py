@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from core.anthropic import AnthropicToOpenAIConverter
+from core.anthropic import AnthropicToOpenAIConverter, OpenAIConversionError
 
 # --- Mock Classes ---
 
@@ -468,3 +468,36 @@ def test_convert_multiple_tool_results():
     assert len(result) == 2
     assert result[0]["tool_call_id"] == "t1"
     assert result[1]["tool_call_id"] == "t2"
+
+
+def test_convert_user_message_tool_result_dict_as_json():
+    content = [
+        MockBlock(
+            type="tool_result",
+            tool_use_id="t_dict",
+            content={"ok": True, "count": 2},
+        ),
+    ]
+    messages = [MockMessage("user", content)]
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+    assert result[0]["role"] == "tool"
+    assert result[0]["content"] == '{"ok": true, "count": 2}'
+
+
+def test_convert_user_message_image_raises():
+    content = [
+        MockBlock(type="image", source={"type": "url", "url": "https://example.com/x"})
+    ]
+    messages = [MockMessage("user", content)]
+    with pytest.raises(OpenAIConversionError):
+        AnthropicToOpenAIConverter.convert_messages(messages)
+
+
+def test_convert_assistant_text_after_tool_use_raises():
+    content = [
+        MockBlock(type="tool_use", id="call_z", name="Read", input={}),
+        MockBlock(type="text", text="Illegal after tool"),
+    ]
+    messages = [MockMessage("assistant", content)]
+    with pytest.raises(OpenAIConversionError):
+        AnthropicToOpenAIConverter.convert_messages(messages)

@@ -24,6 +24,7 @@ _NO_DELTA_BLOCK_KINDS = frozenset(
         WEB_SEARCH_TOOL_RESULT,
         WEB_FETCH_TOOL_RESULT,
         "text_eager",
+        "redacted_thinking",
     }
 )
 
@@ -32,6 +33,7 @@ _ALLOWED_BLOCK_START_TYPES = frozenset(
         "text",
         "thinking",
         "tool_use",
+        "redacted_thinking",
         SERVER_TOOL_USE,
         WEB_SEARCH_TOOL_RESULT,
         WEB_FETCH_TOOL_RESULT,

@@ -1,7 +1,11 @@
 """Anthropic protocol helpers shared across API, providers, and integrations."""
 
 from .content import extract_text_from_content, get_block_attr, get_block_type
-from .conversion import AnthropicToOpenAIConverter, build_base_request_body
+from .conversion import (
+    AnthropicToOpenAIConverter,
+    OpenAIConversionError,
+    build_base_request_body,
+)
 from .errors import (
     append_request_id,
     format_user_error_preview,
@@ -20,6 +24,7 @@ __all__ = [
     "ContentChunk",
     "ContentType",
     "HeuristicToolParser",
+    "OpenAIConversionError",
     "SSEBuilder",
     "ThinkTagParser",
     "append_request_id",

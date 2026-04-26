@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ class _UpstreamBlockState:
     block_type: str
     down_index: int
     open: bool
+    last_start_block: dict[str, Any] | None = None
 
 
 @dataclass
@@ -110,20 +112,38 @@ class OpenRouterProvider(AnthropicMessagesTransport):
 
     @staticmethod
     def _synthetic_start_content_block(
-        block_kind: str, *, upstream_index: int
+        block_kind: str,
+        *,
+        upstream_index: int,
+        stored_tool_block: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a `content_block` for a `content_block_start` with empty streaming fields."""
-        if block_kind == "thinking":
-            return {"type": "thinking", "thinking": ""}
-        if block_kind == "text":
-            return {"type": "text", "text": ""}
         if block_kind == "tool_use":
+            if (
+                isinstance(stored_tool_block, dict)
+                and stored_tool_block.get("type") == "tool_use"
+            ):
+                tool_id = stored_tool_block.get("id")
+                name = stored_tool_block.get("name")
+                inp = stored_tool_block.get("input")
+                return {
+                    "type": "tool_use",
+                    "id": tool_id
+                    if isinstance(tool_id, str) and tool_id
+                    else f"toolu_or_{upstream_index}",
+                    "name": name if isinstance(name, str) else "",
+                    "input": inp if isinstance(inp, dict) else {},
+                }
             return {
                 "type": "tool_use",
                 "id": f"toolu_or_{upstream_index}",
                 "name": "",
                 "input": {},
             }
+        if block_kind == "thinking":
+            return {"type": "thinking", "thinking": ""}
+        if block_kind == "text":
+            return {"type": "text", "text": ""}
         return {"type": "text", "text": ""}
 
     def _synthetic_close_other_open_blocks(
@@ -145,13 +165,21 @@ class OpenRouterProvider(AnthropicMessagesTransport):
         return "".join(out)
 
     def _allocate_new_segment(
-        self, state: _SSEFilterState, upstream_index: int, block_type: str
+        self,
+        state: _SSEFilterState,
+        upstream_index: int,
+        block_type: str,
+        *,
+        last_start_block: dict[str, Any] | None = None,
     ) -> int:
         """Assign a new downstream `index` for a segment and record upstream state."""
         new_idx = state.next_index
         state.next_index += 1
         state.by_upstream[upstream_index] = _UpstreamBlockState(
-            block_type=block_type, down_index=new_idx, open=True
+            block_type=block_type,
+            down_index=new_idx,
+            open=True,
+            last_start_block=last_start_block,
         )
         return new_idx
 
@@ -160,7 +188,7 @@ class OpenRouterProvider(AnthropicMessagesTransport):
         if not isinstance(block_type, str):
             return False
         if block_type.startswith("redacted_thinking"):
-            return True
+            return not thinking_enabled
         return not thinking_enabled and "thinking" in block_type
 
     def _transform_sse_payload(
@@ -197,8 +225,12 @@ class OpenRouterProvider(AnthropicMessagesTransport):
             if not isinstance(block_type, str):
                 return event
             prefix = self._synthetic_close_other_open_blocks(state, upstream_index)
+            stored = copy.deepcopy(block)
             new_idx = self._allocate_new_segment(
-                state, upstream_index, block_type=block_type
+                state,
+                upstream_index,
+                block_type=block_type,
+                last_start_block=stored,
             )
             payload["index"] = new_idx
             return prefix + self._format_sse_event(event_name, json.dumps(payload))
@@ -231,14 +263,25 @@ class OpenRouterProvider(AnthropicMessagesTransport):
                 # More deltas for an upstream block after a synthetic (or other) close:
                 # reopen with a new downstream `index` and emit a synthetic `content_block_start` first.
                 state.pending_suppressed_stops.discard(upstream_index)
+                carry = seg.last_start_block
                 new_idx = self._allocate_new_segment(
-                    state, upstream_index, block_type=block_kind
+                    state,
+                    upstream_index,
+                    block_type=block_kind,
+                    last_start_block=carry,
+                )
+                stored_tool = (
+                    carry
+                    if isinstance(carry, dict) and carry.get("type") == "tool_use"
+                    else None
                 )
                 start_payload = {
                     "type": "content_block_start",
                     "index": new_idx,
                     "content_block": self._synthetic_start_content_block(
-                        block_kind, upstream_index=upstream_index
+                        block_kind,
+                        upstream_index=upstream_index,
+                        stored_tool_block=stored_tool,
                     ),
                 }
                 prefix = self._format_sse_event(

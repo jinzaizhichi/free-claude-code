@@ -8,6 +8,8 @@ from loguru import logger
 
 from config.nim import NimSettings
 from core.anthropic import build_base_request_body, set_if_not_none
+from core.anthropic.conversion import OpenAIConversionError
+from providers.exceptions import InvalidRequestError
 
 
 def _clone_strip_extra_body(
@@ -75,10 +77,13 @@ def build_request_body(
         getattr(request_data, "model", "?"),
         len(getattr(request_data, "messages", [])),
     )
-    body = build_base_request_body(
-        request_data,
-        include_thinking=thinking_enabled,
-    )
+    try:
+        body = build_base_request_body(
+            request_data,
+            include_thinking=thinking_enabled,
+        )
+    except OpenAIConversionError as exc:
+        raise InvalidRequestError(str(exc)) from exc
 
     # NIM-specific max_tokens: cap against nim.max_tokens
     max_tokens = body.get("max_tokens") or getattr(request_data, "max_tokens", None)

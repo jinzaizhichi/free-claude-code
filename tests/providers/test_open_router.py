@@ -1,5 +1,6 @@
 """Tests for OpenRouter providers."""
 
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -209,7 +210,10 @@ def test_build_request_body_strips_unsigned_thinking_history(open_router_provide
 
     body = open_router_provider._build_request_body(req)
 
-    assert body["messages"][1]["content"] == [{"type": "text", "text": "Hello"}]
+    assert body["messages"][1]["content"] == [
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "text", "text": "Hello"},
+    ]
 
 
 def test_build_request_body_preserves_signed_thinking_history(open_router_provider):
@@ -341,7 +345,7 @@ async def test_stream_response_suppresses_native_thinking_when_disabled(
 
 
 @pytest.mark.asyncio
-async def test_stream_response_drops_redacted_thinking_when_enabled(
+async def test_stream_response_preserves_redacted_thinking_when_enabled(
     open_router_provider,
 ):
     response = FakeResponse(
@@ -379,7 +383,61 @@ async def test_stream_response_drops_redacted_thinking_when_enabled(
         events = [e async for e in open_router_provider.stream_response(MockRequest())]
 
     event_text = "".join(events)
+    assert "redacted_thinking" in event_text
+    assert "opaque" in event_text
+    assert "Answer" in event_text
+
+    parsed = parse_sse_text(event_text)
+    first_start = next(
+        p
+        for p in parsed
+        if p.event == "content_block_start"
+        and p.data.get("content_block", {}).get("type") == "redacted_thinking"
+    )
+    assert first_start.data["index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_response_drops_redacted_thinking_when_disabled(
+    open_router_config,
+):
+    provider = OpenRouterProvider(
+        open_router_config.model_copy(update={"enable_thinking": False})
+    )
+    response = FakeResponse(
+        lines=[
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"opaque"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "",
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}',
+            "",
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":1}',
+            "",
+        ]
+    )
+
+    with (
+        patch.object(provider._client, "build_request"),
+        patch.object(
+            provider._client,
+            "send",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+    ):
+        events = [e async for e in provider.stream_response(MockRequest())]
+
+    event_text = "".join(events)
     assert "redacted_thinking" not in event_text
+    assert "opaque" not in event_text
     assert "Answer" in event_text
 
     start_event = next(event for event in events if "content_block_start" in event)
@@ -467,6 +525,71 @@ async def test_stream_response_reopens_interleaved_thinking_after_text(
     assert len(think_starts) == 2, (
         "reopened thinking must have its own `content_block_start`"
     )
+
+
+@pytest.mark.asyncio
+async def test_stream_response_reopened_tool_use_preserves_tool_identity(
+    open_router_provider,
+):
+    """After overlapping close, resumed input_json_delta must keep original tool id/name."""
+    lines: list[str] = []
+    for payload in (
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_real_1",
+                "name": "Read",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path'},
+        },
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '":"/tmp"}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_stop", "index": 0},
+    ):
+        event_name = payload["type"]
+        lines.extend((f"event: {event_name}", f"data: {json.dumps(payload)}", ""))
+
+    response = FakeResponse(lines=lines)
+
+    with (
+        patch.object(open_router_provider._client, "build_request"),
+        patch.object(
+            open_router_provider._client,
+            "send",
+            new_callable=AsyncMock,
+            return_value=response,
+        ),
+    ):
+        events = [e async for e in open_router_provider.stream_response(MockRequest())]
+
+    parsed = parse_sse_text("".join(events))
+    tool_starts = [
+        p
+        for p in parsed
+        if p.event == "content_block_start"
+        and p.data.get("content_block", {}).get("type") == "tool_use"
+    ]
+    assert len(tool_starts) == 2
+    for start in tool_starts:
+        block = start.data["content_block"]
+        assert block["id"] == "toolu_real_1"
+        assert block["name"] == "Read"
 
 
 @pytest.mark.asyncio
