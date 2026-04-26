@@ -14,6 +14,13 @@ except Exception:
     ENCODER = None
 
 
+# Standard headers for Anthropic-style ``text/event-stream`` responses from this proxy.
+ANTHROPIC_SSE_RESPONSE_HEADERS: dict[str, str] = {
+    "X-Accel-Buffering": "no",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+}
+
 STOP_REASON_MAP = {
     "stop": "end_turn",
     "length": "max_tokens",
@@ -64,6 +71,11 @@ class ContentBlockManager:
         return idx
 
     def register_tool_name(self, index: int, name: str) -> None:
+        """Record tool name fragments as they arrive from chunked OpenAI streams.
+
+        Names may be split across deltas; later chunks can extend (``ab`` + ``c``)
+        or repeat prefixes, so we merge conservatively.
+        """
         if index not in self.tool_states:
             self.tool_states[index] = ToolCallState(
                 block_index=-1, tool_id="", name=name
@@ -87,8 +99,7 @@ class ContentBlockManager:
         except Exception:
             return None
 
-        if args_json.get("run_in_background") is not False:
-            args_json["run_in_background"] = False
+        _normalize_task_run_in_background(args_json)
 
         state.task_args_emitted = True
         state.task_arg_buffer = ""
@@ -103,8 +114,7 @@ class ContentBlockManager:
             out = "{}"
             try:
                 args_json = json.loads(state.task_arg_buffer)
-                if args_json.get("run_in_background") is not False:
-                    args_json["run_in_background"] = False
+                _normalize_task_run_in_background(args_json)
                 out = json.dumps(args_json)
             except Exception as e:
                 prefix = state.task_arg_buffer[:120]
@@ -120,6 +130,12 @@ class ContentBlockManager:
             state.task_arg_buffer = ""
             results.append((tool_index, out))
         return results
+
+
+def _normalize_task_run_in_background(args_json: dict) -> None:
+    """Force Claude Code Task subagents to run in foreground (single shared rule)."""
+    if args_json.get("run_in_background") is not False:
+        args_json["run_in_background"] = False
 
 
 class SSEBuilder:
@@ -309,10 +325,7 @@ class SSEBuilder:
             yield self.stop_text_block()
 
     def close_all_blocks(self) -> Iterator[str]:
-        if self.blocks.thinking_started:
-            yield self.stop_thinking_block()
-        if self.blocks.text_started:
-            yield self.stop_text_block()
+        yield from self.close_content_blocks()
         for tool_index, state in list(self.blocks.tool_states.items()):
             if state.started:
                 yield self.stop_tool_block(tool_index)

@@ -10,10 +10,6 @@ from config.nim import NimSettings
 from core.anthropic import build_base_request_body, set_if_not_none
 
 
-def _clone_request_body(body: dict[str, Any]) -> dict[str, Any]:
-    return deepcopy(body)
-
-
 def _clone_strip_extra_body(
     body: dict[str, Any],
     strip: Callable[[dict[str, Any]], bool],
@@ -22,7 +18,7 @@ def _clone_strip_extra_body(
 
     Returns ``None`` when there is no ``extra_body`` dict or ``strip`` reports no change.
     """
-    cloned_body = _clone_request_body(body)
+    cloned_body = deepcopy(body)
     extra_body = cloned_body.get("extra_body")
     if not isinstance(extra_body, dict):
         return None

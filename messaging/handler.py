@@ -99,12 +99,14 @@ class ClaudeMessageHandler:
         *,
         debug_platform_edits: bool = False,
         debug_subagent_stack: bool = False,
+        log_raw_messaging_content: bool = False,
     ):
         self.platform = platform
         self.cli_manager = cli_manager
         self.session_store = session_store
         self._debug_platform_edits = debug_platform_edits
         self._debug_subagent_stack = debug_subagent_stack
+        self._log_raw_messaging_content = log_raw_messaging_content
         self._tree_queue = TreeQueueManager(
             queue_update_callback=self.update_queue_positions,
             node_started_callback=self.mark_node_processing,
@@ -141,16 +143,26 @@ class ClaudeMessageHandler:
         Determines if this is a new conversation or reply,
         creates/extends the message tree, and queues for processing.
         """
-        text_preview = (incoming.text or "")[:80]
-        if len(incoming.text or "") > 80:
-            text_preview += "..."
-        logger.info(
-            "HANDLER_ENTRY: chat_id={} message_id={} reply_to={} text_preview={!r}",
-            incoming.chat_id,
-            incoming.message_id,
-            incoming.reply_to_message_id,
-            text_preview,
-        )
+        raw = incoming.text or ""
+        if self._log_raw_messaging_content:
+            text_preview = raw[:80]
+            if len(raw) > 80:
+                text_preview += "..."
+            logger.info(
+                "HANDLER_ENTRY: chat_id={} message_id={} reply_to={} text_preview={!r}",
+                incoming.chat_id,
+                incoming.message_id,
+                incoming.reply_to_message_id,
+                text_preview,
+            )
+        else:
+            logger.info(
+                "HANDLER_ENTRY: chat_id={} message_id={} reply_to={} text_len={}",
+                incoming.chat_id,
+                incoming.message_id,
+                incoming.reply_to_message_id,
+                len(raw),
+            )
 
         with logger.contextualize(
             chat_id=incoming.chat_id, node_id=incoming.message_id

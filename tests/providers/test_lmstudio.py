@@ -287,7 +287,7 @@ async def test_stream_error_status_code(lmstudio_provider):
 
         assert len(events) == 1
         assert events[0].startswith("event: error\ndata: {")
-        assert "Internal Server Error" in events[0]
+        assert "Provider API request failed" in events[0]
         assert "TEST_ID" in events[0]
 
 

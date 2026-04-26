@@ -217,6 +217,10 @@ class Settings(BaseSettings):
     log_api_error_tracebacks: bool = Field(
         default=False, validation_alias="LOG_API_ERROR_TRACEBACKS"
     )
+    # When false (default), messaging logs omit text/transcription previews (metadata only).
+    log_raw_messaging_content: bool = Field(
+        default=False, validation_alias="LOG_RAW_MESSAGING_CONTENT"
+    )
     debug_platform_edits: bool = Field(
         default=False, validation_alias="DEBUG_PLATFORM_EDITS"
     )
@@ -405,12 +409,12 @@ class Settings(BaseSettings):
     @property
     def provider_type(self) -> str:
         """Extract provider type from the default model string."""
-        return self.model.split("/", 1)[0]
+        return Settings.parse_provider_type(self.model)
 
     @property
     def model_name(self) -> str:
         """Extract the actual model name from the default model string."""
-        return self.model.split("/", 1)[1]
+        return Settings.parse_model_name(self.model)
 
     def resolve_model(self, claude_model_name: str) -> str:
         """Resolve a Claude model name to the configured provider/model string.

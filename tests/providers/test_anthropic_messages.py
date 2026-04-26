@@ -208,5 +208,5 @@ async def test_stream_maps_non_200_to_error_event_and_closes_response(
     assert response.is_closed
     assert len(events) == 1
     assert events[0].startswith("event: error\ndata: {")
-    assert "Internal Server Error" in events[0]
+    assert "Provider API request failed" in events[0]
     assert "REQ_123" in events[0]

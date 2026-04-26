@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -13,6 +13,7 @@ from loguru import logger
 
 from config.settings import Settings
 from core.anthropic import get_token_count, get_user_facing_error_message
+from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
 
@@ -29,6 +30,43 @@ from .web_server_tools import (
 TokenCounter = Callable[[list[Any], str | list[Any] | None, list[Any] | None], int]
 
 ProviderGetter = Callable[[str], BaseProvider]
+
+
+def anthropic_sse_streaming_response(
+    body: AsyncIterator[str],
+) -> StreamingResponse:
+    """Return a :class:`StreamingResponse` for Anthropic-style SSE streams."""
+    return StreamingResponse(
+        body,
+        media_type="text/event-stream",
+        headers=ANTHROPIC_SSE_RESPONSE_HEADERS,
+    )
+
+
+def _log_unexpected_service_exception(
+    settings: Settings,
+    exc: BaseException,
+    *,
+    context: str,
+    request_id: str | None = None,
+) -> None:
+    """Log service-layer failures without echoing exception text unless opted in."""
+    if settings.log_api_error_tracebacks:
+        if request_id is not None:
+            logger.error("{} request_id={}: {}", context, request_id, exc)
+        else:
+            logger.error("{}: {}", context, exc)
+        logger.error(traceback.format_exc())
+        return
+    if request_id is not None:
+        logger.error(
+            "{} request_id={} exc_type={}",
+            context,
+            request_id,
+            type(exc).__name__,
+        )
+    else:
+        logger.error("{} exc_type={}", context, type(exc).__name__)
 
 
 def _require_non_empty_messages(messages: list[Any]) -> None:
@@ -68,18 +106,13 @@ class ClaudeProxyService:
                     allow_private_network_targets=self._settings.web_fetch_allow_private_networks,
                     allowed_schemes=self._settings.web_fetch_allowed_scheme_set(),
                 )
-                return StreamingResponse(
+                return anthropic_sse_streaming_response(
                     stream_web_server_tool_response(
                         routed.request,
                         input_tokens=input_tokens,
                         web_fetch_egress=egress,
+                        verbose_client_errors=self._settings.log_api_error_tracebacks,
                     ),
-                    media_type="text/event-stream",
-                    headers={
-                        "X-Accel-Buffering": "no",
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                    },
                 )
 
             optimized = try_optimizations(routed.request, self._settings)
@@ -104,25 +137,21 @@ class ClaudeProxyService:
             input_tokens = self._token_counter(
                 routed.request.messages, routed.request.system, routed.request.tools
             )
-            return StreamingResponse(
+            return anthropic_sse_streaming_response(
                 provider.stream_response(
                     routed.request,
                     input_tokens=input_tokens,
                     request_id=request_id,
                     thinking_enabled=routed.resolved.thinking_enabled,
                 ),
-                media_type="text/event-stream",
-                headers={
-                    "X-Accel-Buffering": "no",
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
             )
 
         except ProviderError:
             raise
         except Exception as e:
-            logger.error(f"Error: {e!s}\n{traceback.format_exc()}")
+            _log_unexpected_service_exception(
+                self._settings, e, context="CREATE_MESSAGE_ERROR"
+            )
             raise HTTPException(
                 status_code=getattr(e, "status_code", 500),
                 detail=get_user_facing_error_message(e),
@@ -149,11 +178,11 @@ class ClaudeProxyService:
             except ProviderError:
                 raise
             except Exception as e:
-                logger.error(
-                    "COUNT_TOKENS_ERROR: request_id={} error={}\n{}",
-                    request_id,
-                    get_user_facing_error_message(e),
-                    traceback.format_exc(),
+                _log_unexpected_service_exception(
+                    self._settings,
+                    e,
+                    context="COUNT_TOKENS_ERROR",
+                    request_id=request_id,
                 )
                 raise HTTPException(
                     status_code=500, detail=get_user_facing_error_message(e)

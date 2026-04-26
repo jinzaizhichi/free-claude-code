@@ -22,7 +22,7 @@ _providers: dict[str, BaseProvider] = {}
 
 
 def get_settings() -> Settings:
-    """Get application settings via dependency injection."""
+    """Return cached :class:`~config.settings.Settings` (FastAPI-friendly alias)."""
     return _get_settings()
 
 
@@ -60,9 +60,10 @@ def _resolve_with_registry(
     try:
         provider = registry.get(provider_type, settings)
     except AuthenticationError as e:
-        raise HTTPException(
-            status_code=503, detail=get_user_facing_error_message(e)
-        ) from e
+        # Provider :class:`~providers.exceptions.AuthenticationError` messages are
+        # curated configuration hints (env var names, docs links), not upstream noise.
+        detail = str(e).strip() or get_user_facing_error_message(e)
+        raise HTTPException(status_code=503, detail=detail) from e
     except UnknownProviderTypeError:
         logger.error(
             "Unknown provider_type: '{}'. Supported: {}",

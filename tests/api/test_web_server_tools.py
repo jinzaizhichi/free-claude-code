@@ -6,6 +6,7 @@ import httpx
 import pytest
 from starlette.responses import StreamingResponse
 
+import api.web_server_tools
 from api.models.anthropic import Message, MessagesRequest, Tool
 from api.services import ClaudeProxyService
 from api.web_server_tools import (
@@ -139,6 +140,20 @@ def _cm(mock_client: MagicMock) -> MagicMock:
     return cm
 
 
+def _stream_cm(response: httpx.Response) -> MagicMock:
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=response)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+def test_enforce_web_fetch_egress_documents_dns_time_of_use_risk():
+    assert (
+        enforce_web_fetch_egress.__doc__
+        and "time-of-check" in enforce_web_fetch_egress.__doc__
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
     req1 = httpx.Request("GET", "http://8.8.8.8/start")
@@ -147,13 +162,32 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
     res_ok = httpx.Response(200, content=b"hello world", request=req2)
 
     mock_client = MagicMock()
-    mock_client.get = AsyncMock(side_effect=[res_redirect, res_ok])
+    mock_client.stream = MagicMock(
+        side_effect=[_stream_cm(res_redirect), _stream_cm(res_ok)]
+    )
 
     with patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)):
         out = await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
 
     assert out["data"] == "hello world"
-    assert mock_client.get.await_count == 2
+    assert mock_client.stream.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
+    req = httpx.Request("GET", "http://8.8.8.8/big")
+    huge = b"x" * 5000
+    res_ok = httpx.Response(200, content=huge, request=req)
+
+    mock_client = MagicMock()
+    mock_client.stream = MagicMock(return_value=_stream_cm(res_ok))
+
+    monkeypatch.setattr(api.web_server_tools, "_MAX_WEB_FETCH_RESPONSE_BYTES", 100)
+    with patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)):
+        out = await _run_web_fetch("http://8.8.8.8/big", _STRICT_EGRESS)
+
+    assert len(out["data"]) <= 100
+    assert out["data"] == "x" * 100
 
 
 @pytest.mark.asyncio
@@ -164,7 +198,7 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
     )
 
     mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=res_redirect)
+    mock_client.stream = MagicMock(return_value=_stream_cm(res_redirect))
 
     with (
         patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
@@ -172,7 +206,7 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
     ):
         await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
 
-    mock_client.get.assert_awaited_once()
+    mock_client.stream.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -181,7 +215,7 @@ async def test_run_web_fetch_redirect_without_location_raises():
     res_bad = httpx.Response(302, headers={}, request=req1)
 
     mock_client = MagicMock()
-    mock_client.get = AsyncMock(return_value=res_bad)
+    mock_client.stream = MagicMock(return_value=_stream_cm(res_bad))
 
     with (
         patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
@@ -198,7 +232,7 @@ async def test_run_web_fetch_excess_redirects_raises():
     res2 = httpx.Response(302, headers={"Location": "/c"}, request=req2)
 
     mock_client = MagicMock()
-    mock_client.get = AsyncMock(side_effect=[res1, res2])
+    mock_client.stream = MagicMock(side_effect=[_stream_cm(res1), _stream_cm(res2)])
 
     with (
         patch("api.web_server_tools._MAX_WEB_FETCH_REDIRECTS", 1),
@@ -291,3 +325,76 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
     )
     deltas = [e for e in events if e.event == "message_delta"]
     assert deltas[-1].data["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
+
+
+@pytest.mark.asyncio
+async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
+    secret = "sensitive-upstream-token"
+
+    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+        raise ValueError(secret)
+
+    monkeypatch.setattr("api.web_server_tools._run_web_fetch", boom)
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[
+            Message(
+                role="user",
+                content="Fetch https://example.com/sensitive-path?x=1 please",
+            )
+        ],
+        tools=[Tool(name="web_fetch", type="web_fetch_20250910")],
+        tool_choice={"type": "tool", "name": "web_fetch"},
+    )
+
+    with patch("api.web_server_tools.logger.warning") as log_warn:
+        raw = "".join(
+            [
+                event
+                async for event in stream_web_server_tool_response(
+                    request,
+                    input_tokens=1,
+                    web_fetch_egress=_STRICT_EGRESS,
+                    verbose_client_errors=False,
+                )
+            ]
+        )
+
+    assert secret not in raw
+    assert "ValueError" not in raw
+    assert "Web tool request failed." in raw
+    log_blob = " ".join(str(a) for c in log_warn.call_args_list for a in c.args)
+    assert secret not in log_blob
+    assert "example.com" in log_blob
+    assert "/sensitive-path" not in log_blob
+
+
+@pytest.mark.asyncio
+async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
+    monkeypatch,
+):
+    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+        raise OSError(5, "oops")
+
+    monkeypatch.setattr("api.web_server_tools._run_web_fetch", boom)
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[Message(role="user", content="Fetch https://example.com/x")],
+        tools=[Tool(name="web_fetch", type="web_fetch_20250910")],
+        tool_choice={"type": "tool", "name": "web_fetch"},
+    )
+
+    raw = "".join(
+        [
+            event
+            async for event in stream_web_server_tool_response(
+                request,
+                input_tokens=1,
+                web_fetch_egress=_STRICT_EGRESS,
+                verbose_client_errors=True,
+            )
+        ]
+    )
+    assert "OSError" in raw

@@ -29,6 +29,30 @@ from providers.error_mapping import map_error
 from providers.rate_limit import GlobalRateLimiter
 
 
+def _iter_heuristic_tool_use_sse(
+    sse: SSEBuilder, tool_use: dict[str, Any]
+) -> Iterator[str]:
+    """Emit SSE for one heuristic tool_use block (closes open text/thinking first)."""
+    if tool_use.get("name") == "Task" and isinstance(tool_use.get("input"), dict):
+        task_input = tool_use["input"]
+        if task_input.get("run_in_background") is not False:
+            task_input["run_in_background"] = False
+    yield from sse.close_content_blocks()
+    block_idx = sse.blocks.allocate_index()
+    yield sse.content_block_start(
+        block_idx,
+        "tool_use",
+        id=tool_use["id"],
+        name=tool_use["name"],
+    )
+    yield sse.content_block_delta(
+        block_idx,
+        "input_json_delta",
+        json.dumps(tool_use["input"]),
+    )
+    yield sse.content_block_stop(block_idx)
+
+
 class OpenAIChatTransport(BaseProvider):
     """Base for OpenAI-compatible ``/chat/completions`` adapters (NIM, DeepSeek, …)."""
 
@@ -263,26 +287,10 @@ class OpenAIChatTransport(BaseProvider):
                                     yield sse.emit_text_delta(filtered_text)
 
                                 for tool_use in detected_tools:
-                                    for event in sse.close_content_blocks():
-                                        yield event
-
-                                    block_idx = sse.blocks.allocate_index()
-                                    if tool_use.get("name") == "Task" and isinstance(
-                                        tool_use.get("input"), dict
+                                    for event in _iter_heuristic_tool_use_sse(
+                                        sse, tool_use
                                     ):
-                                        tool_use["input"]["run_in_background"] = False
-                                    yield sse.content_block_start(
-                                        block_idx,
-                                        "tool_use",
-                                        id=tool_use["id"],
-                                        name=tool_use["name"],
-                                    )
-                                    yield sse.content_block_delta(
-                                        block_idx,
-                                        "input_json_delta",
-                                        json.dumps(tool_use["input"]),
-                                    )
-                                    yield sse.content_block_stop(block_idx)
+                                        yield event
 
                     # Handle native tool calls
                     if delta.tool_calls:
@@ -343,26 +351,8 @@ class OpenAIChatTransport(BaseProvider):
                 yield sse.emit_text_delta(remaining.content)
 
         for tool_use in heuristic_parser.flush():
-            for event in sse.close_content_blocks():
+            for event in _iter_heuristic_tool_use_sse(sse, tool_use):
                 yield event
-
-            block_idx = sse.blocks.allocate_index()
-            yield sse.content_block_start(
-                block_idx,
-                "tool_use",
-                id=tool_use["id"],
-                name=tool_use["name"],
-            )
-            if tool_use.get("name") == "Task" and isinstance(
-                tool_use.get("input"), dict
-            ):
-                tool_use["input"]["run_in_background"] = False
-            yield sse.content_block_delta(
-                block_idx,
-                "input_json_delta",
-                json.dumps(tool_use["input"]),
-            )
-            yield sse.content_block_stop(block_idx)
 
         if (
             not error_occurred

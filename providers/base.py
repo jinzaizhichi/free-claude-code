@@ -76,5 +76,7 @@ class BaseProvider(ABC):
         thinking_enabled: bool | None = None,
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
+        # Typing: abstract async generators need a yield for AsyncIterator[str]
+        # inference; this branch is never executed.
         if False:
-            yield ""  # Required for ty/mypy to accept abstract async generator
+            yield ""

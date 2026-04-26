@@ -23,6 +23,7 @@ _RUNTIME_EXTRAS = {
     "debug_platform_edits": False,
     "debug_subagent_stack": False,
     "log_api_error_tracebacks": False,
+    "log_raw_messaging_content": False,
 }
 
 
@@ -87,9 +88,50 @@ def test_create_app_provider_error_handler_returns_anthropic_format():
         with TestClient(app) as client:
             resp = client.get("/raise_provider")
         assert resp.status_code == 401
-        body = resp.json()
-        assert body["type"] == "error"
-        assert body["error"]["type"] == "authentication_error"
+    body = resp.json()
+    assert body["type"] == "error"
+    assert body["error"]["type"] == "authentication_error"
+
+
+def test_create_app_provider_error_default_logs_exclude_provider_message():
+    """Provider errors must not log exc.message by default."""
+    from api.app import create_app
+    from providers.exceptions import AuthenticationError
+
+    app = create_app()
+    secret = "provider-upstream-secret-detail"
+
+    @app.get("/raise_provider_secret")
+    async def _raise():
+        raise AuthenticationError(secret)
+
+    api_app_mod = importlib.import_module("api.app")
+    settings = _app_settings(
+        messaging_platform="telegram",
+        telegram_bot_token=None,
+        allowed_telegram_user_id=None,
+        discord_bot_token=None,
+        allowed_discord_channels=None,
+        allowed_dir="",
+        claude_workspace="./agent_workspace",
+        host="127.0.0.1",
+        port=8082,
+        log_file="server.log",
+        log_api_error_tracebacks=False,
+    )
+    with (
+        patch.object(api_app_mod, "get_settings", return_value=settings),
+        patch.object(ProviderRegistry, "cleanup", new=AsyncMock()),
+        patch.object(api_app_mod.logger, "error") as log_err,
+    ):
+        with TestClient(app) as client:
+            resp = client.get("/raise_provider_secret")
+        assert resp.status_code == 401
+
+    blob = " ".join(str(a) for c in log_err.call_args_list for a in c.args)
+    blob += repr([c.kwargs for c in log_err.call_args_list])
+    assert secret not in blob
+    assert "authentication_error" in blob
 
 
 def test_create_app_general_exception_handler_returns_500():

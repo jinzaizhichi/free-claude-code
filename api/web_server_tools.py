@@ -20,7 +20,15 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
+from loguru import logger
 
+from core.anthropic.server_tool_sse import (
+    SERVER_TOOL_USE,
+    WEB_FETCH_TOOL_ERROR,
+    WEB_FETCH_TOOL_RESULT,
+    WEB_SEARCH_TOOL_RESULT,
+    WEB_SEARCH_TOOL_RESULT_ERROR,
+)
 from core.anthropic.sse import format_sse_event
 
 from .models.anthropic import MessagesRequest
@@ -28,6 +36,10 @@ from .models.anthropic import MessagesRequest
 _REQUEST_TIMEOUT_S = 20.0
 _MAX_SEARCH_RESULTS = 10
 _MAX_FETCH_CHARS = 24_000
+# Hard cap on raw bytes read from HTTP responses before decode / HTML parse (memory bound).
+_MAX_WEB_FETCH_RESPONSE_BYTES = 2 * 1024 * 1024
+# Drain at most this many bytes from redirect responses before following Location.
+_REDIRECT_RESPONSE_BODY_CAP_BYTES = 65_536
 _MAX_WEB_FETCH_REDIRECTS = 10
 _WEB_FETCH_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
@@ -50,7 +62,15 @@ class WebFetchEgressPolicy:
 
 
 def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
-    """Validate ``url`` before performing web_fetch; raise on policy violations."""
+    """Validate ``url`` before performing web_fetch; raise on policy violations.
+
+    .. note::
+        Hostnames are resolved to IP addresses at validation time. A malicious or
+        flaky DNS server could in theory change answers before the HTTP client
+        connects (time-of-check/time-of-use). Fully closing that gap requires
+        transport-level pinning or connect-time re-validation; this tool accepts
+        that residual risk (see tests).
+    """
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     if scheme not in policy.allowed_schemes:
@@ -222,20 +242,90 @@ def _extract_url(text: str) -> str:
     return match.group(0).rstrip(").,]") if match else text.strip()
 
 
+def _safe_public_host_for_logs(url: str) -> str:
+    """Return hostname only (no path/query) for structured logs."""
+    host = urlparse(url).hostname or ""
+    return host[:253]
+
+
+async def _drain_response_body_capped(response: httpx.Response, max_bytes: int) -> None:
+    received = 0
+    async for chunk in response.aiter_bytes():
+        received += len(chunk)
+        if received >= max_bytes:
+            break
+
+
+async def _read_response_body_capped(response: httpx.Response, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in response.aiter_bytes():
+        chunks.append(chunk)
+        total += len(chunk)
+        if total >= max_bytes:
+            break
+    body = b"".join(chunks)
+    return body[:max_bytes]
+
+
+def _log_web_tool_failure(
+    tool_name: str,
+    error: BaseException,
+    *,
+    fetch_url: str | None = None,
+) -> None:
+    exc_type = type(error).__name__
+    if isinstance(error, WebFetchEgressViolation):
+        host = _safe_public_host_for_logs(fetch_url) if fetch_url else ""
+        logger.warning(
+            "web_tool_egress_rejected tool={} exc_type={} host={!r}",
+            tool_name,
+            exc_type,
+            host,
+        )
+        return
+    if tool_name == "web_fetch" and fetch_url:
+        logger.warning(
+            "web_tool_failure tool={} exc_type={} host={!r}",
+            tool_name,
+            exc_type,
+            _safe_public_host_for_logs(fetch_url),
+        )
+    else:
+        logger.warning("web_tool_failure tool={} exc_type={}", tool_name, exc_type)
+
+
+def _web_tool_client_error_summary(
+    tool_name: str,
+    error: BaseException,
+    *,
+    verbose: bool,
+) -> str:
+    if verbose:
+        return f"{tool_name} failed: {type(error).__name__}"
+    return "Web tool request failed."
+
+
 async def _run_web_search(query: str) -> list[dict[str, str]]:
-    async with httpx.AsyncClient(
-        timeout=_REQUEST_TIMEOUT_S,
-        follow_redirects=True,
-        headers=_WEB_TOOL_HTTP_HEADERS,
-    ) as client:
-        response = await client.get(
+    async with (
+        httpx.AsyncClient(
+            timeout=_REQUEST_TIMEOUT_S,
+            follow_redirects=True,
+            headers=_WEB_TOOL_HTTP_HEADERS,
+        ) as client,
+        client.stream(
+            "GET",
             "https://lite.duckduckgo.com/lite/",
             params={"q": query},
-        )
+        ) as response,
+    ):
         response.raise_for_status()
-
+        body_bytes = await _read_response_body_capped(
+            response, _MAX_WEB_FETCH_RESPONSE_BYTES
+        )
+    text = body_bytes.decode("utf-8", errors="replace")
     parser = _SearchResultParser()
-    parser.feed(response.text)
+    parser.feed(text)
     return parser.results[:_MAX_SEARCH_RESULTS]
 
 
@@ -250,31 +340,41 @@ async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, st
     ) as client:
         while True:
             await asyncio.to_thread(enforce_web_fetch_egress, current_url, egress)
-            response = await client.get(current_url)
-            if response.status_code in _WEB_FETCH_REDIRECT_STATUSES:
-                if redirect_hops >= _MAX_WEB_FETCH_REDIRECTS:
-                    raise WebFetchEgressViolation(
-                        f"web_fetch exceeded maximum redirects ({_MAX_WEB_FETCH_REDIRECTS})"
+            async with client.stream("GET", current_url) as response:
+                if response.status_code in _WEB_FETCH_REDIRECT_STATUSES:
+                    await _drain_response_body_capped(
+                        response, _REDIRECT_RESPONSE_BODY_CAP_BYTES
                     )
-                location = response.headers.get("location")
-                if not location or not location.strip():
-                    raise WebFetchEgressViolation(
-                        "web_fetch redirect response missing Location header"
-                    )
-                current_url = urljoin(str(response.url), location.strip())
-                redirect_hops += 1
-                continue
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "text/plain")
-            title = current_url
-            data = response.text
+                    if redirect_hops >= _MAX_WEB_FETCH_REDIRECTS:
+                        raise WebFetchEgressViolation(
+                            f"web_fetch exceeded maximum redirects ({_MAX_WEB_FETCH_REDIRECTS})"
+                        )
+                    location = response.headers.get("location")
+                    if not location or not location.strip():
+                        raise WebFetchEgressViolation(
+                            "web_fetch redirect response missing Location header"
+                        )
+                    current_url = urljoin(str(response.url), location.strip())
+                    redirect_hops += 1
+                    continue
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "text/plain")
+                final_url = str(response.url)
+                encoding = response.encoding or "utf-8"
+                body_bytes = await _read_response_body_capped(
+                    response, _MAX_WEB_FETCH_RESPONSE_BYTES
+                )
+
+            text = body_bytes.decode(encoding, errors="replace")
+            title = final_url
+            data = text
             if "html" in content_type.lower():
                 parser = _HTMLTextParser()
-                parser.feed(response.text)
-                title = parser.title or current_url
+                parser.feed(text)
+                title = parser.title or final_url
                 data = "\n".join(parser.text_parts)
             return {
-                "url": str(response.url),
+                "url": final_url,
                 "title": title,
                 "media_type": "text/plain",
                 "data": data[:_MAX_FETCH_CHARS],
@@ -295,6 +395,7 @@ async def stream_web_server_tool_response(
     input_tokens: int,
     *,
     web_fetch_egress: WebFetchEgressPolicy,
+    verbose_client_errors: bool = False,
 ) -> AsyncIterator[str]:
     tool_name = _forced_web_server_tool_name(request)
     if tool_name is None or not _has_tool_named(request, tool_name):
@@ -303,7 +404,6 @@ async def stream_web_server_tool_response(
     text = _request_text(request)
     message_id = f"msg_{uuid.uuid4()}"
     tool_id = f"srvtoolu_{uuid.uuid4().hex}"
-    output_tokens = 1
     usage_key = (
         "web_search_requests" if tool_name == "web_search" else "web_fetch_requests"
     )
@@ -312,6 +412,14 @@ async def stream_web_server_tool_response(
         if tool_name == "web_search"
         else {"url": _extract_url(text)}
     )
+    _result_block_for_tool = {
+        "web_search": WEB_SEARCH_TOOL_RESULT,
+        "web_fetch": WEB_FETCH_TOOL_RESULT,
+    }
+    _error_payload_type_for_tool = {
+        "web_search": WEB_SEARCH_TOOL_RESULT_ERROR,
+        "web_fetch": WEB_FETCH_TOOL_ERROR,
+    }
 
     yield format_sse_event(
         "message_start",
@@ -335,7 +443,7 @@ async def stream_web_server_tool_response(
             "type": "content_block_start",
             "index": 0,
             "content_block": {
-                "type": "server_tool_use",
+                "type": SERVER_TOOL_USE,
                 "id": tool_id,
                 "name": tool_name,
                 "input": tool_input,
@@ -359,7 +467,7 @@ async def stream_web_server_tool_response(
                 for result in results
             ]
             summary = _search_summary(query, results)
-            result_block_type = "web_search_tool_result"
+            result_block_type = WEB_SEARCH_TOOL_RESULT
         else:
             fetched = await _run_web_fetch(str(tool_input["url"]), web_fetch_egress)
             result_content = {
@@ -378,20 +486,18 @@ async def stream_web_server_tool_response(
                 "retrieved_at": datetime.now(UTC).isoformat(),
             }
             summary = fetched["data"][:_MAX_FETCH_CHARS]
-            result_block_type = "web_fetch_tool_result"
+            result_block_type = WEB_FETCH_TOOL_RESULT
     except Exception as error:
-        result_block_type = (
-            "web_search_tool_result"
-            if tool_name == "web_search"
-            else "web_fetch_tool_result"
+        fetch_url = str(tool_input["url"]) if tool_name == "web_fetch" else None
+        _log_web_tool_failure(tool_name, error, fetch_url=fetch_url)
+        result_block_type = _result_block_for_tool[tool_name]
+        result_content = {
+            "type": _error_payload_type_for_tool[tool_name],
+            "error_code": "unavailable",
+        }
+        summary = _web_tool_client_error_summary(
+            tool_name, error, verbose=verbose_client_errors
         )
-        error_type = (
-            "web_search_tool_result_error"
-            if tool_name == "web_search"
-            else "web_fetch_tool_error"
-        )
-        result_content = {"type": error_type, "error_code": "unavailable"}
-        summary = f"{tool_name} failed: {type(error).__name__}"
 
     output_tokens = max(1, len(summary) // 4)
 

@@ -134,3 +134,11 @@ def test_append_request_id_suffix():
     """Request id suffix should be appended deterministically."""
     message = append_request_id("Provider request failed.", "req_abc123")
     assert message == "Provider request failed. (request_id=req_abc123)"
+
+
+def test_user_facing_message_bad_request_prefers_mapped_text_over_sdk_string():
+    """BadRequestError should map to stable wording even when str(exc) is non-empty."""
+    exc = _make_openai_error(
+        openai.BadRequestError, message="leaky-upstream-detail", status_code=400
+    )
+    assert get_user_facing_error_message(exc) == "Invalid request sent to provider."

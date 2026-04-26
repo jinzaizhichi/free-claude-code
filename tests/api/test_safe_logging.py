@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
+
 from api import services as services_mod
 from api.models.anthropic import Message, MessagesRequest
 from api.services import ClaudeProxyService
@@ -83,3 +86,71 @@ def test_sse_builder_raw_logging_includes_event_body_when_enabled():
     message = str(mock_debug.call_args)
     assert "message_start" in message
     assert "role" in message
+
+
+def _flatten_log_calls(mock_log) -> str:
+    parts: list[str] = []
+    for call in mock_log.call_args_list:
+        parts.extend(str(arg) for arg in call.args)
+        parts.append(repr(call.kwargs))
+    return " ".join(parts)
+
+
+def test_create_message_unexpected_error_default_logs_exclude_exception_text():
+    settings = Settings()
+    assert settings.log_api_error_tracebacks is False
+    secret = "upstream-secret-token-abc"
+
+    mock_provider = MagicMock()
+
+    def stream_boom(*_a, **_kw):
+        raise RuntimeError(secret)
+
+    mock_provider.stream_response = stream_boom
+    service = ClaudeProxyService(settings, provider_getter=lambda _: mock_provider)
+    request = MessagesRequest(
+        model="claude-3-haiku-20240307",
+        max_tokens=10,
+        messages=[Message(role="user", content="hi")],
+    )
+
+    with (
+        patch.object(services_mod.logger, "error") as log_err,
+        pytest.raises(HTTPException),
+    ):
+        service.create_message(request)
+
+    blob = _flatten_log_calls(log_err)
+    assert secret not in blob
+    assert "RuntimeError" in blob
+
+
+def test_count_tokens_unexpected_error_default_logs_exclude_exception_text():
+    settings = Settings()
+    assert settings.log_api_error_tracebacks is False
+    secret = "count-tokens-leak-xyz"
+
+    def boom(*_a, **_kw):
+        raise ValueError(secret)
+
+    service = ClaudeProxyService(
+        settings,
+        provider_getter=lambda _: MagicMock(),
+        token_counter=boom,
+    )
+    from api.models.anthropic import TokenCountRequest
+
+    req = TokenCountRequest(
+        model="claude-3-haiku-20240307",
+        messages=[Message(role="user", content="x")],
+    )
+
+    with (
+        patch.object(services_mod.logger, "error") as log_err,
+        pytest.raises(HTTPException),
+    ):
+        service.count_tokens(req)
+
+    blob = _flatten_log_calls(log_err)
+    assert secret not in blob
+    assert "ValueError" in blob

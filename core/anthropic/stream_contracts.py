@@ -10,13 +10,19 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from .server_tool_sse import (
+    SERVER_TOOL_USE,
+    WEB_FETCH_TOOL_RESULT,
+    WEB_SEARCH_TOOL_RESULT,
+)
+
 # Content blocks that only use content_block_start/stop (no deltas), including
 # Anthropic server tools and eager text emitted in a single start event.
 _NO_DELTA_BLOCK_KINDS = frozenset(
     {
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
+        SERVER_TOOL_USE,
+        WEB_SEARCH_TOOL_RESULT,
+        WEB_FETCH_TOOL_RESULT,
         "text_eager",
     }
 )
@@ -26,9 +32,9 @@ _ALLOWED_BLOCK_START_TYPES = frozenset(
         "text",
         "thinking",
         "tool_use",
-        "server_tool_use",
-        "web_search_tool_result",
-        "web_fetch_tool_result",
+        SERVER_TOOL_USE,
+        WEB_SEARCH_TOOL_RESULT,
+        WEB_FETCH_TOOL_RESULT,
     }
 )
 

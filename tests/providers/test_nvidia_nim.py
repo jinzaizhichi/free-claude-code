@@ -348,7 +348,7 @@ async def test_stream_response_does_not_retry_unrelated_bad_request(provider_con
 
     assert mock_create.await_count == 1
     event_text = "".join(events)
-    assert "unrelated bad request" in event_text
+    assert "Invalid request sent to provider" in event_text
     assert "event: message_stop" in event_text
 
 
@@ -444,5 +444,5 @@ async def test_stream_response_bad_request_without_reasoning_budget_does_not_ret
         events = [e async for e in nim_provider.stream_response(req)]
 
     assert mock_create.await_count == 1
-    assert any("Unsupported field: top_k" in event for event in events)
+    assert any("Invalid request sent to provider" in event for event in events)
     assert any("message_stop" in event for event in events)

@@ -112,6 +112,12 @@ class AppRuntime:
                     nvidia_nim_api_key=self.settings.nvidia_nim_api_key,
                     messaging_rate_limit=self.settings.messaging_rate_limit,
                     messaging_rate_window=self.settings.messaging_rate_window,
+                    log_raw_messaging_content=getattr(
+                        self.settings, "log_raw_messaging_content", False
+                    ),
+                    log_api_error_tracebacks=getattr(
+                        self.settings, "log_api_error_tracebacks", False
+                    ),
                 ),
             )
 
@@ -167,6 +173,9 @@ class AppRuntime:
             session_store=session_store,
             debug_platform_edits=self.settings.debug_platform_edits,
             debug_subagent_stack=self.settings.debug_subagent_stack,
+            log_raw_messaging_content=getattr(
+                self.settings, "log_raw_messaging_content", False
+            ),
         )
         self._restore_tree_state(session_store)
 
