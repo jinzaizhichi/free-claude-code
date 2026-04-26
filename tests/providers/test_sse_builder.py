@@ -1,19 +1,19 @@
 """Tests for core.anthropic.sse."""
 
-import json
 from unittest.mock import patch
 
 import pytest
 
 from core.anthropic import ContentBlockManager, SSEBuilder, map_stop_reason
+from core.anthropic.stream_contracts import parse_sse_text
 
 
 def _parse_sse(sse_str: str) -> dict:
     """Parse an SSE event string into its data payload."""
-    for line in sse_str.strip().split("\n"):
-        if line.startswith("data: "):
-            return json.loads(line[len("data: ") :])
-    raise ValueError(f"No data line found in SSE: {sse_str}")
+    events = parse_sse_text(sse_str)
+    if len(events) != 1:
+        raise ValueError(f"expected 1 SSE event, got {len(events)} in {sse_str!r}")
+    return events[0].data
 
 
 class TestMapStopReason:

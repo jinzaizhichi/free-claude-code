@@ -5,9 +5,8 @@ from typing import Any
 
 from loguru import logger
 
+from config.nim import NimSettings
 from core.anthropic import build_base_request_body, set_if_not_none
-
-from .options import NimRequestOptions
 
 
 def _clone_request_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -68,7 +67,7 @@ def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | N
 
 
 def build_request_body(
-    request_data: Any, nim: NimRequestOptions, *, thinking_enabled: bool
+    request_data: Any, nim: NimSettings, *, thinking_enabled: bool
 ) -> dict:
     """Build OpenAI-format request body from Anthropic request."""
     logger.debug(

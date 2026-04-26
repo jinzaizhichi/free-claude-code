@@ -6,11 +6,15 @@ web tools are server-side: the API response itself must include the tool result.
 
 from __future__ import annotations
 
+import asyncio
 import html
+import ipaddress
 import json
 import re
+import socket
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
@@ -23,6 +27,76 @@ from .models.anthropic import MessagesRequest
 _REQUEST_TIMEOUT_S = 20.0
 _MAX_SEARCH_RESULTS = 10
 _MAX_FETCH_CHARS = 24_000
+
+# Shared HTTP defaults for outbound web tool requests (avoid duplicated headers).
+_WEB_TOOL_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 compatible; free-claude-code/2.0",
+}
+
+
+class WebFetchEgressViolation(ValueError):
+    """Raised when a web_fetch URL is rejected by egress policy (SSRF guard)."""
+
+
+@dataclass(frozen=True, slots=True)
+class WebFetchEgressPolicy:
+    """Egress rules for user-influenced web_fetch URLs."""
+
+    allow_private_network_targets: bool
+    allowed_schemes: frozenset[str]
+
+
+def enforce_web_fetch_egress(url: str, policy: WebFetchEgressPolicy) -> None:
+    """Validate ``url`` before performing web_fetch; raise on policy violations."""
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in policy.allowed_schemes:
+        raise WebFetchEgressViolation(
+            f"URL scheme {scheme!r} is not allowed for web_fetch"
+        )
+
+    host = parsed.hostname
+    if host is None or host == "":
+        raise WebFetchEgressViolation("web_fetch URL must include a host")
+
+    if policy.allow_private_network_targets:
+        return
+
+    host_lower = host.lower()
+    if host_lower == "localhost" or host_lower.endswith(".localhost"):
+        raise WebFetchEgressViolation("localhost targets are not allowed for web_fetch")
+    if host_lower.endswith(".local"):
+        raise WebFetchEgressViolation(".local hostnames are not allowed for web_fetch")
+
+    try:
+        parsed_ip = ipaddress.ip_address(host)
+    except ValueError:
+        parsed_ip = None
+
+    if parsed_ip is not None:
+        if not parsed_ip.is_global:
+            raise WebFetchEgressViolation(
+                f"Non-public IP host {host!r} is not allowed for web_fetch"
+            )
+        return
+
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise WebFetchEgressViolation(
+            f"Could not resolve host {host!r}: {exc}"
+        ) from exc
+
+    for *_, sockaddr in infos:
+        addr = sockaddr[0]
+        try:
+            resolved = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if not resolved.is_global:
+            raise WebFetchEgressViolation(
+                f"Host {host!r} resolves to a non-public address ({resolved})"
+            )
 
 
 class _SearchResultParser(HTMLParser):
@@ -153,7 +227,7 @@ async def _run_web_search(query: str) -> list[dict[str, str]]:
     async with httpx.AsyncClient(
         timeout=_REQUEST_TIMEOUT_S,
         follow_redirects=True,
-        headers={"User-Agent": "Mozilla/5.0 compatible; free-claude-code/2.0"},
+        headers=_WEB_TOOL_HTTP_HEADERS,
     ) as client:
         response = await client.get(
             "https://lite.duckduckgo.com/lite/",
@@ -166,11 +240,12 @@ async def _run_web_search(query: str) -> list[dict[str, str]]:
     return parser.results[:_MAX_SEARCH_RESULTS]
 
 
-async def _run_web_fetch(url: str) -> dict[str, str]:
+async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, str]:
+    await asyncio.to_thread(enforce_web_fetch_egress, url, egress)
     async with httpx.AsyncClient(
         timeout=_REQUEST_TIMEOUT_S,
         follow_redirects=True,
-        headers={"User-Agent": "Mozilla/5.0 compatible; free-claude-code/2.0"},
+        headers=_WEB_TOOL_HTTP_HEADERS,
     ) as client:
         response = await client.get(url)
         response.raise_for_status()
@@ -201,7 +276,10 @@ def _search_summary(query: str, results: list[dict[str, str]]) -> str:
 
 
 async def stream_web_server_tool_response(
-    request: MessagesRequest, input_tokens: int
+    request: MessagesRequest,
+    input_tokens: int,
+    *,
+    web_fetch_egress: WebFetchEgressPolicy,
 ) -> AsyncIterator[str]:
     tool_name = _forced_web_server_tool_name(request)
     if tool_name is None or not _has_tool_named(request, tool_name):
@@ -268,7 +346,7 @@ async def stream_web_server_tool_response(
             summary = _search_summary(query, results)
             result_block_type = "web_search_tool_result"
         else:
-            fetched = await _run_web_fetch(str(tool_input["url"]))
+            fetched = await _run_web_fetch(str(tool_input["url"]), web_fetch_egress)
             result_content = {
                 "type": "web_fetch_result",
                 "url": fetched["url"],

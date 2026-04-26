@@ -21,6 +21,7 @@ from .models.anthropic import MessagesRequest, TokenCountRequest
 from .models.responses import TokenCountResponse
 from .optimization_handlers import try_optimizations
 from .web_server_tools import (
+    WebFetchEgressPolicy,
     is_web_server_tool_request,
     stream_web_server_tool_response,
 )
@@ -28,6 +29,11 @@ from .web_server_tools import (
 TokenCounter = Callable[[list[Any], str | list[Any] | None, list[Any] | None], int]
 
 ProviderGetter = Callable[[str], BaseProvider]
+
+
+def _require_non_empty_messages(messages: list[Any]) -> None:
+    if not messages:
+        raise InvalidRequestError("messages cannot be empty")
 
 
 class ClaudeProxyService:
@@ -48,18 +54,25 @@ class ClaudeProxyService:
     def create_message(self, request_data: MessagesRequest) -> object:
         """Create a message response or streaming response."""
         try:
-            if not request_data.messages:
-                raise InvalidRequestError("messages cannot be empty")
+            _require_non_empty_messages(request_data.messages)
 
             routed = self._model_router.resolve_messages_request(request_data)
-            if is_web_server_tool_request(routed.request):
+            if self._settings.enable_web_server_tools and is_web_server_tool_request(
+                routed.request
+            ):
                 input_tokens = self._token_counter(
                     routed.request.messages, routed.request.system, routed.request.tools
                 )
                 logger.info("Optimization: Handling Anthropic web server tool")
+                egress = WebFetchEgressPolicy(
+                    allow_private_network_targets=self._settings.web_fetch_allow_private_networks,
+                    allowed_schemes=self._settings.web_fetch_allowed_scheme_set(),
+                )
                 return StreamingResponse(
                     stream_web_server_tool_response(
-                        routed.request, input_tokens=input_tokens
+                        routed.request,
+                        input_tokens=input_tokens,
+                        web_fetch_egress=egress,
                     ),
                     media_type="text/event-stream",
                     headers={
@@ -83,9 +96,10 @@ class ClaudeProxyService:
                 routed.request.model,
                 len(routed.request.messages),
             )
-            logger.debug(
-                "FULL_PAYLOAD [{}]: {}", request_id, routed.request.model_dump()
-            )
+            if self._settings.log_raw_api_payloads:
+                logger.debug(
+                    "FULL_PAYLOAD [{}]: {}", request_id, routed.request.model_dump()
+                )
 
             input_tokens = self._token_counter(
                 routed.request.messages, routed.request.system, routed.request.tools
@@ -119,6 +133,7 @@ class ClaudeProxyService:
         request_id = f"req_{uuid.uuid4().hex[:12]}"
         with logger.contextualize(request_id=request_id):
             try:
+                _require_non_empty_messages(request_data.messages)
                 routed = self._model_router.resolve_token_count_request(request_data)
                 tokens = self._token_counter(
                     routed.request.messages, routed.request.system, routed.request.tools
@@ -131,6 +146,8 @@ class ClaudeProxyService:
                     tokens,
                 )
                 return TokenCountResponse(input_tokens=tokens)
+            except ProviderError:
+                raise
             except Exception as e:
                 logger.error(
                     "COUNT_TOKENS_ERROR: request_id={} error={}\n{}",

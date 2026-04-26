@@ -59,10 +59,9 @@ and `providers.registry` from the providers package (not per-adapter modules).
 `messaging/` does not import `api`, `cli`, or `smoke`, and may import `providers`
 only via `providers.nvidia_nim.voice` (NVIDIA/Riva offline ASR). Stream contract
 helpers live in `core/anthropic/stream_contracts.py`; live smoke imports that
-module directly (no dedicated smoke SSE shim). NVIDIA NIM chat tuning uses
-`config.nim.NimSettings` on `Settings`; the adapter takes
-`providers.nvidia_nim.options.NimRequestOptions`, constructed in
-`providers.registry` with `NimRequestOptions.model_validate(settings.nim.model_dump())`.
+module directly (no dedicated smoke SSE shim). NVIDIA NIM chat tuning uses the
+canonical `config.nim.NimSettings` model on `Settings`; `providers.registry`
+passes `settings.nim` into `NvidiaNimProvider` without a duplicate schema.
 Default upstream base URLs use a single constant per endpoint in
 `providers/defaults.py` (e.g. `NVIDIA_NIM_DEFAULT_BASE`). Process-cached provider
 helpers (`api.dependencies.get_provider` / `get_provider_for_type`) exist for

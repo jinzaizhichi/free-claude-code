@@ -5,7 +5,6 @@ Supports:
 - NVIDIA NIM: NVIDIA NIM Whisper/Parakeet
 """
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +49,7 @@ def _get_pipeline(model_id: str, device: str, hf_token: str = "") -> Any:
             import torch
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
-            if resolved_token:
-                os.environ["HF_TOKEN"] = resolved_token
+            hf_auth_token = resolved_token or None
 
             use_cuda = device == "cuda" and torch.cuda.is_available()
             pipe_device = "cuda:0" if use_cuda else "cpu"
@@ -62,9 +60,10 @@ def _get_pipeline(model_id: str, device: str, hf_token: str = "") -> Any:
                 dtype=model_dtype,
                 low_cpu_mem_usage=True,
                 attn_implementation="sdpa",
+                token=hf_auth_token,
             )
             model = model.to(pipe_device)
-            processor = AutoProcessor.from_pretrained(model_id)
+            processor = AutoProcessor.from_pretrained(model_id, token=hf_auth_token)
 
             pipe = pipeline(
                 "automatic-speech-recognition",

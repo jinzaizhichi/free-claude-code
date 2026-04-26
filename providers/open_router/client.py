@@ -260,7 +260,12 @@ class OpenRouterProvider(AnthropicMessagesTransport):
         sent_any_event: bool,
     ) -> Iterator[str]:
         """Emit the Anthropic SSE error shape expected by Claude clients."""
-        sse = SSEBuilder(f"msg_{uuid.uuid4()}", request.model, input_tokens)
+        sse = SSEBuilder(
+            f"msg_{uuid.uuid4()}",
+            request.model,
+            input_tokens,
+            log_raw_events=self._config.log_raw_sse_events,
+        )
         if not sent_any_event:
             yield sse.message_start()
         yield from sse.emit_error(error_message)

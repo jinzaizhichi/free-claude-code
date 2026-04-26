@@ -6,11 +6,11 @@ from typing import Any
 import openai
 from loguru import logger
 
+from config.nim import NimSettings
 from providers.base import ProviderConfig
 from providers.defaults import NVIDIA_NIM_DEFAULT_BASE
 from providers.openai_compat import OpenAIChatTransport
 
-from .options import NimRequestOptions
 from .request import (
     build_request_body,
     clone_body_without_chat_template,
@@ -21,7 +21,7 @@ from .request import (
 class NvidiaNimProvider(OpenAIChatTransport):
     """NVIDIA NIM provider using official OpenAI client."""
 
-    def __init__(self, config: ProviderConfig, *, nim_settings: NimRequestOptions):
+    def __init__(self, config: ProviderConfig, *, nim_settings: NimSettings):
         super().__init__(
             config,
             provider_name="NIM",

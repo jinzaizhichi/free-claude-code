@@ -120,17 +120,32 @@ class ContentBlockManager:
 class SSEBuilder:
     """Builder for Anthropic SSE streaming events."""
 
-    def __init__(self, message_id: str, model: str, input_tokens: int = 0):
+    def __init__(
+        self,
+        message_id: str,
+        model: str,
+        input_tokens: int = 0,
+        *,
+        log_raw_events: bool = False,
+    ):
         self.message_id = message_id
         self.model = model
         self.input_tokens = input_tokens
+        self._log_raw_events = log_raw_events
         self.blocks = ContentBlockManager()
         self._accumulated_text_parts: list[str] = []
         self._accumulated_reasoning_parts: list[str] = []
 
     def _format_event(self, event_type: str, data: dict) -> str:
         event_str = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-        logger.debug("SSE_EVENT: {} - {}", event_type, event_str.strip())
+        if self._log_raw_events:
+            logger.debug("SSE_EVENT: {} - {}", event_type, event_str.strip())
+        else:
+            logger.debug(
+                "SSE_EVENT: event_type={} serialized_bytes={}",
+                event_type,
+                len(event_str.encode("utf-8")),
+            )
         return event_str
 
     def message_start(self) -> str:

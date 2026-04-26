@@ -22,6 +22,7 @@ from config.provider_ids import SUPPORTED_PROVIDER_IDS
 from core.anthropic.stream_contracts import (
     SSEEvent,
     assert_anthropic_stream_contract,
+    event_index,
     has_tool_use,
     parse_sse_lines,
     text_content,
@@ -590,14 +591,14 @@ def assistant_content_from_events(events: list[SSEEvent]) -> list[dict[str, Any]
     block_order: list[int] = []
     for event in events:
         if event.event == "content_block_start":
-            index = _event_index(event)
+            index = event_index(event)
             block = event.data.get("content_block", {})
             if isinstance(block, dict):
                 blocks[index] = dict(block)
                 block_order.append(index)
             continue
         if event.event == "content_block_delta":
-            index = _event_index(event)
+            index = event_index(event)
             block = blocks.get(index)
             delta = event.data.get("delta", {})
             if not isinstance(block, dict) or not isinstance(delta, dict):
@@ -661,12 +662,6 @@ def default_cli_events(session_id: str) -> list[dict[str, Any]]:
         },
         {"type": "exit", "code": 0, "stderr": None},
     ]
-
-
-def _event_index(event: SSEEvent) -> int:
-    value = event.data.get("index")
-    assert isinstance(value, int), event.data
-    return value
 
 
 def assert_product_stream(events: list[SSEEvent]) -> None:

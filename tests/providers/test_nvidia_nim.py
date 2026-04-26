@@ -5,8 +5,9 @@ import openai
 import pytest
 from httpx import Request, Response
 
+from config.nim import NimSettings
+from providers.defaults import NVIDIA_NIM_DEFAULT_BASE
 from providers.nvidia_nim import NvidiaNimProvider
-from providers.nvidia_nim.options import NimRequestOptions
 
 
 # Mock data classes
@@ -43,7 +44,7 @@ class MockRequest:
 def _make_bad_request_error(message: str) -> openai.BadRequestError:
     response = Response(
         status_code=400,
-        request=Request("POST", "https://integrate.api.nvidia.com/v1/chat/completions"),
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
     )
     body = {"error": {"message": message, "type": "BadRequestError", "code": 400}}
     return openai.BadRequestError(message, response=response, body=body)
@@ -68,7 +69,7 @@ def mock_rate_limiter():
 async def test_init(provider_config):
     """Test provider initialization."""
     with patch("providers.openai_compat.AsyncOpenAI") as mock_openai:
-        provider = NvidiaNimProvider(provider_config, nim_settings=NimRequestOptions())
+        provider = NvidiaNimProvider(provider_config, nim_settings=NimSettings())
         assert provider._api_key == "test_key"
         assert provider._base_url == "https://test.api.nvidia.com/v1"
         mock_openai.assert_called_once()
@@ -87,7 +88,7 @@ async def test_init_uses_configurable_timeouts():
         http_connect_timeout=5.0,
     )
     with patch("providers.openai_compat.AsyncOpenAI") as mock_openai:
-        NvidiaNimProvider(config, nim_settings=NimRequestOptions())
+        NvidiaNimProvider(config, nim_settings=NimSettings())
         call_kwargs = mock_openai.call_args[1]
         timeout = call_kwargs["timeout"]
         assert timeout.read == 600.0
@@ -98,7 +99,7 @@ async def test_init_uses_configurable_timeouts():
 @pytest.mark.asyncio
 async def test_build_request_body(provider_config):
     """Test request body construction."""
-    provider = NvidiaNimProvider(provider_config, nim_settings=NimRequestOptions())
+    provider = NvidiaNimProvider(provider_config, nim_settings=NimSettings())
     req = MockRequest()
     body = provider._build_request_body(req)
 
@@ -122,7 +123,7 @@ async def test_build_request_body_omits_reasoning_when_globally_disabled(
 ):
     provider = NvidiaNimProvider(
         provider_config.model_copy(update={"enable_thinking": False}),
-        nim_settings=NimRequestOptions(),
+        nim_settings=NimSettings(),
     )
     req = MockRequest()
     body = provider._build_request_body(req)
@@ -136,7 +137,7 @@ async def test_build_request_body_omits_reasoning_when_globally_disabled(
 async def test_build_request_body_omits_reasoning_when_request_disables_thinking(
     provider_config,
 ):
-    provider = NvidiaNimProvider(provider_config, nim_settings=NimRequestOptions())
+    provider = NvidiaNimProvider(provider_config, nim_settings=NimSettings())
     req = MockRequest()
     req.thinking.enabled = False
     body = provider._build_request_body(req)
@@ -235,7 +236,7 @@ async def test_stream_response_thinking_reasoning_content(nim_provider):
 async def test_stream_response_suppresses_thinking_when_disabled(provider_config):
     provider = NvidiaNimProvider(
         provider_config.model_copy(update={"enable_thinking": False}),
-        nim_settings=NimRequestOptions(),
+        nim_settings=NimSettings(),
     )
     req = MockRequest()
 
@@ -277,7 +278,7 @@ def _make_bad_request_error(message: str) -> openai.BadRequestError:
 async def test_stream_response_retries_without_chat_template(provider_config):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimRequestOptions(chat_template="custom_template"),
+        nim_settings=NimSettings(chat_template="custom_template"),
     )
     req = MockRequest(model="mistralai/mixtral-8x7b-instruct-v0.1")
 
@@ -334,7 +335,7 @@ async def test_stream_response_retries_without_chat_template(provider_config):
 async def test_stream_response_does_not_retry_unrelated_bad_request(provider_config):
     provider = NvidiaNimProvider(
         provider_config,
-        nim_settings=NimRequestOptions(chat_template="custom_template"),
+        nim_settings=NimSettings(chat_template="custom_template"),
     )
     req = MockRequest(model="mistralai/mixtral-8x7b-instruct-v0.1")
 

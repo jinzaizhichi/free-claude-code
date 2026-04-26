@@ -7,7 +7,6 @@ Uses tree-based queuing for message ordering.
 """
 
 import asyncio
-import os
 import time
 
 from loguru import logger
@@ -97,10 +96,15 @@ class ClaudeMessageHandler:
         platform: MessagingPlatform,
         cli_manager: SessionManagerInterface,
         session_store: SessionStore,
+        *,
+        debug_platform_edits: bool = False,
+        debug_subagent_stack: bool = False,
     ):
         self.platform = platform
         self.cli_manager = cli_manager
         self.session_store = session_store
+        self._debug_platform_edits = debug_platform_edits
+        self._debug_subagent_stack = debug_subagent_stack
         self._tree_queue = TreeQueueManager(
             queue_update_callback=self.update_queue_positions,
             node_started_callback=self.mark_node_processing,
@@ -317,7 +321,10 @@ class ClaudeMessageHandler:
         self,
     ) -> tuple[TranscriptBuffer, RenderCtx]:
         """Create transcript buffer and render context for node processing."""
-        transcript = TranscriptBuffer(show_tool_results=False)
+        transcript = TranscriptBuffer(
+            show_tool_results=False,
+            debug_subagent_stack=self._debug_subagent_stack,
+        )
         return transcript, self.get_render_ctx()
 
     async def _handle_session_info_event(
@@ -467,7 +474,7 @@ class ClaudeMessageHandler:
                     status,
                     len(display),
                 )
-                if os.getenv("DEBUG_PLATFORM_EDITS") == "1":
+                if self._debug_platform_edits:
                     logger.debug("PLATFORM_EDIT_TEXT:\n{}", display)
                 else:
                     head = display[:500]

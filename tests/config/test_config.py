@@ -31,6 +31,11 @@ class TestSettings:
         assert isinstance(settings.fast_prefix_detection, bool)
         assert isinstance(settings.enable_model_thinking, bool)
         assert settings.http_read_timeout == 120.0
+        assert settings.enable_web_server_tools is False
+        assert settings.log_raw_api_payloads is False
+        assert settings.log_raw_sse_events is False
+        assert settings.debug_platform_edits is False
+        assert settings.debug_subagent_stack is False
 
     def test_get_settings_cached(self):
         """Test get_settings returns cached instance."""

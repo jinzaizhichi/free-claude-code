@@ -42,10 +42,10 @@ def provider_config():
 
 @pytest.fixture
 def nim_provider(provider_config):
+    from config.nim import NimSettings
     from providers.nvidia_nim import NvidiaNimProvider
-    from providers.nvidia_nim.options import NimRequestOptions
 
-    return NvidiaNimProvider(provider_config, nim_settings=NimRequestOptions())
+    return NvidiaNimProvider(provider_config, nim_settings=NimSettings())
 
 
 @pytest.fixture

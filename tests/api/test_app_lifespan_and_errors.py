@@ -20,6 +20,8 @@ _RUNTIME_EXTRAS = {
     "messaging_rate_limit": 1,
     "messaging_rate_window": 1.0,
     "max_message_log_entries_per_chat": None,
+    "debug_platform_edits": False,
+    "debug_subagent_stack": False,
 }
 
 

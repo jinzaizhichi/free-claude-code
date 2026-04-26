@@ -24,6 +24,7 @@ class ProviderConfig(BaseModel):
     http_connect_timeout: float = 2.0
     enable_thinking: bool = True
     proxy: str = ""
+    log_raw_sse_events: bool = False
 
 
 class BaseProvider(ABC):

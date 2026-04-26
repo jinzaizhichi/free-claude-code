@@ -165,6 +165,8 @@ class AppRuntime:
             platform=platform,
             cli_manager=self.cli_manager,
             session_store=session_store,
+            debug_platform_edits=self.settings.debug_platform_edits,
+            debug_subagent_stack=self.settings.debug_subagent_stack,
         )
         self._restore_tree_state(session_store)
 

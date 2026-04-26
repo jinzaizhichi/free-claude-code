@@ -1,11 +1,11 @@
 """Tests for OpenRouter providers."""
 
-import json
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.anthropic.stream_contracts import parse_sse_text
 from providers.base import ProviderConfig
 from providers.open_router import OpenRouterProvider
 from providers.open_router.request import OPENROUTER_DEFAULT_MAX_TOKENS
@@ -332,7 +332,7 @@ async def test_stream_response_suppresses_native_thinking_when_disabled(
     assert "Answer" in event_text
 
     text_start = next(event for event in events if "content_block_start" in event)
-    payload = json.loads(text_start.split("data: ", 1)[1])
+    payload = parse_sse_text(text_start)[0].data
     assert payload["index"] == 0
 
 
@@ -379,7 +379,7 @@ async def test_stream_response_drops_redacted_thinking_when_enabled(
     assert "Answer" in event_text
 
     start_event = next(event for event in events if "content_block_start" in event)
-    payload = json.loads(start_event.split("data: ", 1)[1])
+    payload = parse_sse_text(start_event)[0].data
     assert payload["index"] == 0
     assert payload["content_block"]["type"] == "text"
 

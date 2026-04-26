@@ -191,6 +191,35 @@ class Settings(BaseSettings):
     enable_suggestion_mode_skip: bool = True
     enable_filepath_extraction_mock: bool = True
 
+    # ==================== Local web server tools (web_search / web_fetch) ====================
+    # Off by default: these tools perform outbound HTTP from the proxy (SSRF risk).
+    enable_web_server_tools: bool = Field(
+        default=False, validation_alias="ENABLE_WEB_SERVER_TOOLS"
+    )
+    # Comma-separated URL schemes allowed for web_fetch (default: http,https).
+    web_fetch_allowed_schemes: str = Field(
+        default="http,https", validation_alias="WEB_FETCH_ALLOWED_SCHEMES"
+    )
+    # When true, skip private/loopback/link-local IP blocking for web_fetch (lab only).
+    web_fetch_allow_private_networks: bool = Field(
+        default=False, validation_alias="WEB_FETCH_ALLOW_PRIVATE_NETWORKS"
+    )
+
+    # ==================== Debug / diagnostic logging (avoid sensitive content) ====================
+    # When false (default), API and SSE helpers log only metadata (counts, lengths, ids).
+    log_raw_api_payloads: bool = Field(
+        default=False, validation_alias="LOG_RAW_API_PAYLOADS"
+    )
+    log_raw_sse_events: bool = Field(
+        default=False, validation_alias="LOG_RAW_SSE_EVENTS"
+    )
+    debug_platform_edits: bool = Field(
+        default=False, validation_alias="DEBUG_PLATFORM_EDITS"
+    )
+    debug_subagent_stack: bool = Field(
+        default=False, validation_alias="DEBUG_SUBAGENT_STACK"
+    )
+
     # ==================== NIM Settings ====================
     nim: NimSettings = Field(default_factory=NimSettings)
 
@@ -302,6 +331,19 @@ class Settings(BaseSettings):
             raise ValueError("messaging_rate_window must be > 0")
         return float(v)
 
+    @field_validator("web_fetch_allowed_schemes")
+    @classmethod
+    def validate_web_fetch_allowed_schemes(cls, v: str) -> str:
+        schemes = [part.strip().lower() for part in v.split(",") if part.strip()]
+        if not schemes:
+            raise ValueError("web_fetch_allowed_schemes must list at least one scheme")
+        for scheme in schemes:
+            if not scheme.isascii() or not scheme.isalpha():
+                raise ValueError(
+                    f"Invalid URL scheme in web_fetch_allowed_schemes: {scheme!r}"
+                )
+        return ",".join(schemes)
+
     @field_validator("ollama_base_url")
     @classmethod
     def validate_ollama_base_url(cls, v: str) -> str:
@@ -391,6 +433,14 @@ class Settings(BaseSettings):
         if "sonnet" in name_lower and self.enable_sonnet_thinking is not None:
             return self.enable_sonnet_thinking
         return self.enable_model_thinking
+
+    def web_fetch_allowed_scheme_set(self) -> frozenset[str]:
+        """Return normalized schemes allowed for web_fetch."""
+        return frozenset(
+            part.strip().lower()
+            for part in self.web_fetch_allowed_schemes.split(",")
+            if part.strip()
+        )
 
     @staticmethod
     def parse_provider_type(model_string: str) -> str:

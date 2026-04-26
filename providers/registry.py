@@ -109,12 +109,8 @@ PROVIDER_DESCRIPTORS: dict[str, ProviderDescriptor] = {
 
 def _create_nvidia_nim(config: ProviderConfig, settings: Settings) -> BaseProvider:
     from providers.nvidia_nim import NvidiaNimProvider
-    from providers.nvidia_nim.options import NimRequestOptions
 
-    return NvidiaNimProvider(
-        config,
-        nim_settings=NimRequestOptions.model_validate(settings.nim.model_dump()),
-    )
+    return NvidiaNimProvider(config, nim_settings=settings.nim)
 
 
 def _create_open_router(config: ProviderConfig, _settings: Settings) -> BaseProvider:
@@ -123,25 +119,25 @@ def _create_open_router(config: ProviderConfig, _settings: Settings) -> BaseProv
     return OpenRouterProvider(config)
 
 
-def _create_deepseek(config: ProviderConfig, settings: Settings) -> BaseProvider:
+def _create_deepseek(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     from providers.deepseek import DeepSeekProvider
 
     return DeepSeekProvider(config)
 
 
-def _create_lmstudio(config: ProviderConfig, settings: Settings) -> BaseProvider:
+def _create_lmstudio(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     from providers.lmstudio import LMStudioProvider
 
     return LMStudioProvider(config)
 
 
-def _create_llamacpp(config: ProviderConfig, settings: Settings) -> BaseProvider:
+def _create_llamacpp(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     from providers.llamacpp import LlamaCppProvider
 
     return LlamaCppProvider(config)
 
 
-def _create_ollama(config: ProviderConfig, settings: Settings) -> BaseProvider:
+def _create_ollama(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     from providers.ollama import OllamaProvider
 
     return OllamaProvider(config)
@@ -212,6 +208,7 @@ def build_provider_config(
         http_connect_timeout=settings.http_connect_timeout,
         enable_thinking=settings.enable_model_thinking,
         proxy=proxy,
+        log_raw_sse_events=settings.log_raw_sse_events,
     )
 
 
