@@ -1,7 +1,8 @@
 import asyncio
 from typing import cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from starlette.responses import StreamingResponse
 
@@ -10,6 +11,7 @@ from api.services import ClaudeProxyService
 from api.web_server_tools import (
     WebFetchEgressPolicy,
     WebFetchEgressViolation,
+    _run_web_fetch,
     enforce_web_fetch_egress,
     is_web_server_tool_request,
     stream_web_server_tool_response,
@@ -128,6 +130,82 @@ def test_enforce_web_fetch_egress_skips_private_checks_when_opted_in():
             allowed_schemes=frozenset({"http", "https"}),
         ),
     )
+
+
+def _cm(mock_client: MagicMock) -> MagicMock:
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=mock_client)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+@pytest.mark.asyncio
+async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
+    req1 = httpx.Request("GET", "http://8.8.8.8/start")
+    res_redirect = httpx.Response(302, headers={"Location": "/final"}, request=req1)
+    req2 = httpx.Request("GET", "http://8.8.8.8/final")
+    res_ok = httpx.Response(200, content=b"hello world", request=req2)
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(side_effect=[res_redirect, res_ok])
+
+    with patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)):
+        out = await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
+
+    assert out["data"] == "hello world"
+    assert mock_client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_web_fetch_redirect_to_blocked_host_raises():
+    req1 = httpx.Request("GET", "http://8.8.8.8/start")
+    res_redirect = httpx.Response(
+        302, headers={"Location": "http://127.0.0.1/secret"}, request=req1
+    )
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=res_redirect)
+
+    with (
+        patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
+        pytest.raises(WebFetchEgressViolation),
+    ):
+        await _run_web_fetch("http://8.8.8.8/start", _STRICT_EGRESS)
+
+    mock_client.get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_web_fetch_redirect_without_location_raises():
+    req1 = httpx.Request("GET", "http://8.8.8.8/here")
+    res_bad = httpx.Response(302, headers={}, request=req1)
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(return_value=res_bad)
+
+    with (
+        patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
+        pytest.raises(WebFetchEgressViolation, match="missing Location"),
+    ):
+        await _run_web_fetch("http://8.8.8.8/here", _STRICT_EGRESS)
+
+
+@pytest.mark.asyncio
+async def test_run_web_fetch_excess_redirects_raises():
+    req1 = httpx.Request("GET", "http://8.8.8.8/a")
+    res1 = httpx.Response(302, headers={"Location": "/b"}, request=req1)
+    req2 = httpx.Request("GET", "http://8.8.8.8/b")
+    res2 = httpx.Response(302, headers={"Location": "/c"}, request=req2)
+
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(side_effect=[res1, res2])
+
+    with (
+        patch("api.web_server_tools._MAX_WEB_FETCH_REDIRECTS", 1),
+        patch("api.web_server_tools.httpx.AsyncClient", return_value=_cm(mock_client)),
+        pytest.raises(WebFetchEgressViolation, match="exceeded maximum redirects"),
+    ):
+        await _run_web_fetch("http://8.8.8.8/a", _STRICT_EGRESS)
 
 
 @pytest.mark.asyncio

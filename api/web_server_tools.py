@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import html
 import ipaddress
-import json
 import re
 import socket
 import uuid
@@ -18,15 +17,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
+
+from core.anthropic.sse import format_sse_event
 
 from .models.anthropic import MessagesRequest
 
 _REQUEST_TIMEOUT_S = 20.0
 _MAX_SEARCH_RESULTS = 10
 _MAX_FETCH_CHARS = 24_000
+_MAX_WEB_FETCH_REDIRECTS = 10
+_WEB_FETCH_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 # Shared HTTP defaults for outbound web tool requests (avoid duplicated headers).
 _WEB_TOOL_HTTP_HEADERS = {
@@ -164,10 +167,6 @@ class _HTMLTextParser(HTMLParser):
             self.text_parts.append(text)
 
 
-def _format_event(event_type: str, data: dict[str, Any]) -> str:
-    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-
-
 def _content_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -241,29 +240,45 @@ async def _run_web_search(query: str) -> list[dict[str, str]]:
 
 
 async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, str]:
-    await asyncio.to_thread(enforce_web_fetch_egress, url, egress)
+    """Fetch URL with manual redirects so each hop is validated by egress policy."""
+    current_url = url
+    redirect_hops = 0
     async with httpx.AsyncClient(
         timeout=_REQUEST_TIMEOUT_S,
-        follow_redirects=True,
+        follow_redirects=False,
         headers=_WEB_TOOL_HTTP_HEADERS,
     ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-
-    content_type = response.headers.get("content-type", "text/plain")
-    title = url
-    data = response.text
-    if "html" in content_type.lower():
-        parser = _HTMLTextParser()
-        parser.feed(response.text)
-        title = parser.title or url
-        data = "\n".join(parser.text_parts)
-    return {
-        "url": str(response.url),
-        "title": title,
-        "media_type": "text/plain",
-        "data": data[:_MAX_FETCH_CHARS],
-    }
+        while True:
+            await asyncio.to_thread(enforce_web_fetch_egress, current_url, egress)
+            response = await client.get(current_url)
+            if response.status_code in _WEB_FETCH_REDIRECT_STATUSES:
+                if redirect_hops >= _MAX_WEB_FETCH_REDIRECTS:
+                    raise WebFetchEgressViolation(
+                        f"web_fetch exceeded maximum redirects ({_MAX_WEB_FETCH_REDIRECTS})"
+                    )
+                location = response.headers.get("location")
+                if not location or not location.strip():
+                    raise WebFetchEgressViolation(
+                        "web_fetch redirect response missing Location header"
+                    )
+                current_url = urljoin(str(response.url), location.strip())
+                redirect_hops += 1
+                continue
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "text/plain")
+            title = current_url
+            data = response.text
+            if "html" in content_type.lower():
+                parser = _HTMLTextParser()
+                parser.feed(response.text)
+                title = parser.title or current_url
+                data = "\n".join(parser.text_parts)
+            return {
+                "url": str(response.url),
+                "title": title,
+                "media_type": "text/plain",
+                "data": data[:_MAX_FETCH_CHARS],
+            }
 
 
 def _search_summary(query: str, results: list[dict[str, str]]) -> str:
@@ -298,7 +313,7 @@ async def stream_web_server_tool_response(
         else {"url": _extract_url(text)}
     )
 
-    yield _format_event(
+    yield format_sse_event(
         "message_start",
         {
             "type": "message_start",
@@ -314,7 +329,7 @@ async def stream_web_server_tool_response(
             },
         },
     )
-    yield _format_event(
+    yield format_sse_event(
         "content_block_start",
         {
             "type": "content_block_start",
@@ -327,7 +342,7 @@ async def stream_web_server_tool_response(
             },
         },
     )
-    yield _format_event(
+    yield format_sse_event(
         "content_block_stop", {"type": "content_block_stop", "index": 0}
     )
 
@@ -380,7 +395,7 @@ async def stream_web_server_tool_response(
 
     output_tokens = max(1, len(summary) // 4)
 
-    yield _format_event(
+    yield format_sse_event(
         "content_block_start",
         {
             "type": "content_block_start",
@@ -392,10 +407,10 @@ async def stream_web_server_tool_response(
             },
         },
     )
-    yield _format_event(
+    yield format_sse_event(
         "content_block_stop", {"type": "content_block_stop", "index": 1}
     )
-    yield _format_event(
+    yield format_sse_event(
         "content_block_start",
         {
             "type": "content_block_start",
@@ -403,10 +418,10 @@ async def stream_web_server_tool_response(
             "content_block": {"type": "text", "text": summary},
         },
     )
-    yield _format_event(
+    yield format_sse_event(
         "content_block_stop", {"type": "content_block_stop", "index": 2}
     )
-    yield _format_event(
+    yield format_sse_event(
         "message_delta",
         {
             "type": "message_delta",
@@ -418,4 +433,4 @@ async def stream_web_server_tool_response(
             },
         },
     )
-    yield _format_event("message_stop", {"type": "message_stop"})
+    yield format_sse_event("message_stop", {"type": "message_stop"})

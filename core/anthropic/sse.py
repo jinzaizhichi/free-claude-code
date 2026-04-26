@@ -29,6 +29,11 @@ def map_stop_reason(openai_reason: str | None) -> str:
     )
 
 
+def format_sse_event(event_type: str, data: dict) -> str:
+    """Format one Anthropic-style SSE event (no logging)."""
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
 @dataclass
 class ToolCallState:
     """State for a single streaming tool call."""
@@ -137,7 +142,7 @@ class SSEBuilder:
         self._accumulated_reasoning_parts: list[str] = []
 
     def _format_event(self, event_type: str, data: dict) -> str:
-        event_str = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+        event_str = format_sse_event(event_type, data)
         if self._log_raw_events:
             logger.debug("SSE_EVENT: {} - {}", event_type, event_str.strip())
         else:

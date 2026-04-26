@@ -8,7 +8,11 @@ from config.settings import Settings
 from config.settings import get_settings as _get_settings
 from core.anthropic import get_user_facing_error_message
 from providers.base import BaseProvider
-from providers.exceptions import AuthenticationError, UnknownProviderTypeError
+from providers.exceptions import (
+    AuthenticationError,
+    ServiceUnavailableError,
+    UnknownProviderTypeError,
+)
 from providers.registry import PROVIDER_DESCRIPTORS, ProviderRegistry
 
 # Process-level cache: only for :func:`get_provider_for_type` / :func:`get_provider`
@@ -31,10 +35,9 @@ def resolve_provider(
     """Resolve a provider using the app-scoped registry when ``app`` is set.
 
     When ``app`` is not ``None``, the app-owned :attr:`app.state.provider_registry`
-    is always used. If the registry is missing (e.g. a test app without
-    :class:`~api.runtime.AppRuntime` startup), a new :class:`ProviderRegistry`
-    is installed on ``app.state`` so the process cache is never mixed with
-    per-request app identity.
+    must exist (installed by :class:`~api.runtime.AppRuntime` during startup).
+    Callers that construct a bare ``FastAPI`` without lifespan must set
+    ``app.state.provider_registry`` explicitly.
 
     When ``app`` is ``None`` (no HTTP context), uses the process-level
     :data:`_providers` cache only.
@@ -42,8 +45,10 @@ def resolve_provider(
     if app is not None:
         reg = getattr(app.state, "provider_registry", None)
         if reg is None:
-            reg = ProviderRegistry()
-            app.state.provider_registry = reg
+            raise ServiceUnavailableError(
+                "Provider registry is not configured. Ensure AppRuntime startup ran "
+                "or assign app.state.provider_registry for test apps."
+            )
         return _resolve_with_registry(reg, provider_type, settings)
     return _resolve_with_registry(ProviderRegistry(_providers), provider_type, settings)
 

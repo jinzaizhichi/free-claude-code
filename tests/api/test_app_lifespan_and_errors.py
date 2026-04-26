@@ -22,6 +22,7 @@ _RUNTIME_EXTRAS = {
     "max_message_log_entries_per_chat": None,
     "debug_platform_edits": False,
     "debug_subagent_stack": False,
+    "log_api_error_tracebacks": False,
 }
 
 
@@ -123,6 +124,50 @@ def test_create_app_general_exception_handler_returns_500():
         body = resp.json()
         assert body["type"] == "error"
         assert body["error"]["type"] == "api_error"
+
+
+def test_create_app_general_exception_default_logs_exclude_exception_message():
+    """Unhandled errors must not log exception text by default (may echo user content)."""
+    from api.app import create_app
+
+    app = create_app()
+
+    secret = "user-provided-secret-token-xyzzy"
+
+    @app.get("/raise_secret")
+    async def _raise_secret():
+        raise ValueError(secret)
+
+    api_app_mod = importlib.import_module("api.app")
+    settings = _app_settings(
+        messaging_platform="telegram",
+        telegram_bot_token=None,
+        allowed_telegram_user_id=None,
+        discord_bot_token=None,
+        allowed_discord_channels=None,
+        allowed_dir="",
+        claude_workspace="./agent_workspace",
+        host="127.0.0.1",
+        port=8082,
+        log_file="server.log",
+        log_api_error_tracebacks=False,
+    )
+    with (
+        patch.object(api_app_mod, "get_settings", return_value=settings),
+        patch.object(ProviderRegistry, "cleanup", new=AsyncMock()),
+        patch.object(api_app_mod.logger, "error") as log_err,
+    ):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.get("/raise_secret")
+        assert resp.status_code == 500
+
+    flattened: list[str] = []
+    for call in log_err.call_args_list:
+        flattened.extend(str(arg) for arg in call.args)
+        flattened.append(repr(call.kwargs))
+    blob = " ".join(flattened)
+    assert secret not in blob
+    assert "ValueError" in blob
 
 
 @pytest.mark.parametrize(

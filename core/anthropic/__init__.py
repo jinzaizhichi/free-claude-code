@@ -3,7 +3,7 @@
 from .content import extract_text_from_content, get_block_attr, get_block_type
 from .conversion import AnthropicToOpenAIConverter, build_base_request_body
 from .errors import append_request_id, get_user_facing_error_message
-from .sse import ContentBlockManager, SSEBuilder, map_stop_reason
+from .sse import ContentBlockManager, SSEBuilder, format_sse_event, map_stop_reason
 from .thinking import ContentChunk, ContentType, ThinkTagParser
 from .tokens import get_token_count
 from .tools import HeuristicToolParser
@@ -20,6 +20,7 @@ __all__ = [
     "append_request_id",
     "build_base_request_body",
     "extract_text_from_content",
+    "format_sse_event",
     "get_block_attr",
     "get_block_type",
     "get_token_count",

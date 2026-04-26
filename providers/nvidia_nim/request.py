@@ -1,5 +1,6 @@
 """Request builder for NVIDIA NIM provider."""
 
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
@@ -11,6 +12,40 @@ from core.anthropic import build_base_request_body, set_if_not_none
 
 def _clone_request_body(body: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(body)
+
+
+def _clone_strip_extra_body(
+    body: dict[str, Any],
+    strip: Callable[[dict[str, Any]], bool],
+) -> dict[str, Any] | None:
+    """Deep-clone ``body`` and remove fields via ``strip`` on ``extra_body`` only.
+
+    Returns ``None`` when there is no ``extra_body`` dict or ``strip`` reports no change.
+    """
+    cloned_body = _clone_request_body(body)
+    extra_body = cloned_body.get("extra_body")
+    if not isinstance(extra_body, dict):
+        return None
+    if not strip(extra_body):
+        return None
+    if not extra_body:
+        cloned_body.pop("extra_body", None)
+    return cloned_body
+
+
+def _strip_reasoning_budget_fields(extra_body: dict[str, Any]) -> bool:
+    removed = extra_body.pop("reasoning_budget", None) is not None
+    chat_template_kwargs = extra_body.get("chat_template_kwargs")
+    if (
+        isinstance(chat_template_kwargs, dict)
+        and chat_template_kwargs.pop("reasoning_budget", None) is not None
+    ):
+        removed = True
+    return removed
+
+
+def _strip_chat_template_field(extra_body: dict[str, Any]) -> bool:
+    return extra_body.pop("chat_template", None) is not None
 
 
 def _set_extra(
@@ -27,43 +62,12 @@ def _set_extra(
 
 def clone_body_without_reasoning_budget(body: dict[str, Any]) -> dict[str, Any] | None:
     """Clone a request body and strip only reasoning_budget fields."""
-    cloned_body = _clone_request_body(body)
-    extra_body = cloned_body.get("extra_body")
-    if not isinstance(extra_body, dict):
-        return None
-
-    removed = extra_body.pop("reasoning_budget", None) is not None
-
-    chat_template_kwargs = extra_body.get("chat_template_kwargs")
-    if (
-        isinstance(chat_template_kwargs, dict)
-        and chat_template_kwargs.pop("reasoning_budget", None) is not None
-    ):
-        removed = True
-
-    if not extra_body:
-        cloned_body.pop("extra_body", None)
-
-    if not removed:
-        return None
-
-    return cloned_body
+    return _clone_strip_extra_body(body, _strip_reasoning_budget_fields)
 
 
 def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | None:
     """Clone a request body and strip only chat_template."""
-    cloned_body = _clone_request_body(body)
-    extra_body = cloned_body.get("extra_body")
-    if not isinstance(extra_body, dict):
-        return None
-
-    if extra_body.pop("chat_template", None) is None:
-        return None
-
-    if not extra_body:
-        cloned_body.pop("extra_body", None)
-
-    return cloned_body
+    return _clone_strip_extra_body(body, _strip_chat_template_field)
 
 
 def build_request_body(

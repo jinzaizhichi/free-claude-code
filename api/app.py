@@ -1,5 +1,6 @@
 """FastAPI application factory and configuration."""
 
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -109,10 +110,17 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
         """Handle general errors and return Anthropic format."""
-        logger.error(f"General Error: {exc!s}")
-        import traceback
-
-        logger.error(traceback.format_exc())
+        settings = get_settings()
+        if settings.log_api_error_tracebacks:
+            logger.error("General Error: {}", exc)
+            logger.error(traceback.format_exc())
+        else:
+            logger.error(
+                "General Error: path={} method={} exc_type={}",
+                request.url.path,
+                request.method,
+                type(exc).__name__,
+            )
         return JSONResponse(
             status_code=500,
             content={

@@ -213,6 +213,10 @@ class Settings(BaseSettings):
     log_raw_sse_events: bool = Field(
         default=False, validation_alias="LOG_RAW_SSE_EVENTS"
     )
+    # When false (default), unhandled exceptions log only type + route metadata (no message/traceback).
+    log_api_error_tracebacks: bool = Field(
+        default=False, validation_alias="LOG_API_ERROR_TRACEBACKS"
+    )
     debug_platform_edits: bool = Field(
         default=False, validation_alias="DEBUG_PLATFORM_EDITS"
     )
